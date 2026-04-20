@@ -1,8 +1,13 @@
 🚀 UBID Intelligence Platform
 
+Live Dashboard Link : ai-for-bharat-hackathon-mbnb15q5v-rohan-16devs-projects.vercel.app
+
 An AI-powered industrial intelligence system that analyzes entity data, detects inconsistencies, and provides strategic insights using Google Gemini.
 
 ---
+
+Made in collaboration with arindammandal826-lab
+I was involved in the development,debugging and testing of this app.
 
 🧠 Features
 
@@ -56,5 +61,5 @@ npm run dev
 
 👤 Authors
 
-Arindam Mandal
+Arindam Mandal,
 Rohan Mishra 
