@@ -1,6 +1,6 @@
 🚀 UBID Intelligence Platform
 
-Live Dashboard Link : https://ai-for-bharat-hackathon-mbnb15q5v-rohan-16devs-projects.vercel.app
+Live Dashboard Link : https://ai-for-bharat-hackathon.vercel.app/
 
 An AI-powered industrial intelligence system that analyzes entity data, detects inconsistencies, and provides strategic insights using Google Gemini.
 
