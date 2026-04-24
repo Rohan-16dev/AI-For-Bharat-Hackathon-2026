@@ -19,7 +19,7 @@ export const SchemaEvolutionTool = () => {
       // Try to parse to ensure it's JSON
       const parsed = JSON.parse(input);
       const result = await analyzeDataAnomaly(parsed);
-      setAnalysis(result ?? null);
+      setAnalysis(result);
     } catch (err) {
       setError("Invalid JSON format. Please provide a valid data structure for analysis.");
     } finally {

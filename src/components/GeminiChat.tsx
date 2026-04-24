@@ -44,10 +44,13 @@ export const GeminiChat = () => {
       
       const response = await getGeneralChatResponse(userMessage, history);
       setMessages(prev => [...prev, { role: 'model', text: response || 'Sorry, I could not process that.' }]);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Chat error:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      setMessages(prev => [...prev, { role: 'model', text: `Error: ${errorMessage}. Please try again.` }]);
+      const errorMessage = error.message?.includes('Engine unavailable') 
+        ? "AI Engine is currently unresponsive. Please verify manual registry integrity or check network status."
+        : "The assistant encountered a logic failure. This signal has been logged for system healing.";
+      
+      setMessages(prev => [...prev, { role: 'model', text: errorMessage }]);
     } finally {
       setIsLoading(false);
     }

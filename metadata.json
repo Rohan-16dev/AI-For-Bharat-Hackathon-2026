@@ -1,6 +1,6 @@
 {
-  "name": "Karnataka UBID Intelligence Platform",
-  "description": "A unified business identifier and activity intelligence platform for Karnataka Commerce & Industry, featuring entity resolution and human-in-the-loop review.",
+  "name": "KUBIP Logic Engine v4.0",
+  "description": "Karnataka Unified Business Identifier (KUBIP) Logic Engine. Architecting Entity Resolution (Parent/Child PAN Sovereignty) and Activity Intelligence (Admin vs Operational signals).",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

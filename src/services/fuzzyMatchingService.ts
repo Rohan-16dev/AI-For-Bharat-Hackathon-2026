@@ -119,95 +119,207 @@ export const soundex = (str: string): string => {
 };
 
 /**
- * Compares two records and returns a detailed match analysis
+ * Compares two records and returns a detailed match analysis based on Karnataka UBID Logic Engine rules.
  */
 export const compareRecords = (
   recordA: SourceRecord, 
   recordB: SourceRecord, 
   knowledge?: SystemKnowledge
 ) => {
-  const reasons: string[] = [];
-  const riskFactors: string[] = [];
-  
-  // Weights (allow fallback to system defaults)
-  const weights = knowledge?.learnedWeights || {
-    nameWeight: 0.5,
-    addressWeight: 0.3,
-    pinWeight: 0.2
+  // RULE: HUMAN_AUTHORITY - Check manual blacklist (UNLINK signals)
+  const isBlacklisted = (idA: string, idB: string) => {
+    return knowledge?.manualBlacklist.some(b => 
+      (b.recordIdA === idA && b.recordIdB === idB) || 
+      (b.recordIdA === idB && b.recordIdB === idA)
+    );
   };
 
-  // 1. Exact Identifier Match (The "Anchor" signals)
-  if (recordA.gstin && recordA.gstin === recordB.gstin && recordA.gstin !== 'Pending') {
+  if (isBlacklisted(recordA.id, recordB.id)) {
     return {
-      confidence: 0.99,
-      reasons: ['GSTIN Exact Match'],
-      riskFactors: []
+      score: 0.1,
+      confidence: 0.1,
+      verdict: 'ORPHAN' as const,
+      edge_case_flag: 'MANUAL_REVERSION' as const,
+      reasoning: 'HUMAN_AUTHORITY: Manual inspection confirmed this linkage was false. Scoring bypassed.',
+      reasons: ['Manual Reversion by Admin'],
+      riskFactors: ['Identity Overlap - Do Not Merge'],
+      ubid_suggestion: 'NEW_GEN_REQUIRED'
     };
   }
 
-  if (recordA.pan && recordA.pan === recordB.pan) {
-    return {
-      confidence: 0.98,
-      reasons: ['PAN Exact Match'],
-      riskFactors: []
-    };
-  }
+  // --- ANCHOR SYSTEM Extraction ---
+  const panA = recordA.pan?.replace(/[^A-Z0-9]/g, '').toUpperCase();
+  const panB = recordB.pan?.replace(/[^A-Z0-9]/g, '').toUpperCase();
+  const panMatch = panA && panB && panA === panB;
 
-  // 2. Name Similarity
+  const gstinA = (recordA.gstin && recordA.gstin !== 'Pending') ? recordA.gstin.toUpperCase() : null;
+  const gstinB = (recordB.gstin && recordB.gstin !== 'Pending') ? recordB.gstin.toUpperCase() : null;
+  const gstinMatch = gstinA && gstinB && gstinA === gstinB;
+
+  const tradeA = recordA.tradeLicense?.toUpperCase() || recordA.licenseId?.toUpperCase();
+  const tradeB = recordB.tradeLicense?.toUpperCase() || recordB.licenseId?.toUpperCase();
+  const tradeMatch = tradeA && tradeB && tradeA === tradeB;
+
+  const pinMatch = recordA.pinCode === recordB.pinCode;
+  
   const normNameA = normalizeString(recordA.businessName);
   const normNameB = normalizeString(recordB.businessName);
-  const nameScore = stringSimilarity(normNameA, normNameB);
+  const nameSim = stringSimilarity(normNameA, normNameB);
+
+  // --- 0. FEEDBACK LOOP: Check Approved Aliases (Passive Learning) ---
+  // If this exact name/address variation was previously approved by a human
+  let feedbackBoost = 0;
+  if (knowledge?.approvedAliases) {
+    const isKnownAlias = knowledge.approvedAliases.some(a => 
+      a.name === recordB.businessName && a.address === recordB.address
+    );
+    if (isKnownAlias) {
+      feedbackBoost = 0.15; // Significant boost for historically confirmed variations
+    }
+  }
+
+  // --- HARD RULE: Different PANs = Different Legal Entities ---
+  if (panA && panB && panA !== panB) {
+    return {
+      score: 0.35,
+      confidence: 0.35,
+      verdict: 'IDENTITY_COLLISION' as const,
+      edge_case_flag: 'NONE' as const,
+      reasoning: 'HARD RULE: Different PANs found. These are distinct Legal Entities regardless of name/location similarity.',
+      reasons: ['Conflicting Legal Anchors (PAN)'],
+      riskFactors: ['PAN Mismatch'],
+      ubid_suggestion: 'NEW_GEN_REQUIRED'
+    };
+  }
+
+  // --- 1. Confidence 95-100 (AUTO_MERGE) ---
   
-  if (nameScore > 0.85) {
-    reasons.push(`High Name Similarity (${(nameScore * 100).toFixed(0)}%)`);
-  } else if (nameScore > 0.6) {
-    reasons.push(`Moderate Name Similarity (${(nameScore * 100).toFixed(0)}%)`);
+  // Exact PAN AND Exact GSTIN AND Geospatial Match
+  if (panMatch && gstinMatch && pinMatch) {
+    return {
+      score: 99.0,
+      confidence: 0.99,
+      verdict: 'AUTO_MERGE' as const,
+      edge_case_flag: 'NONE' as const,
+      reasoning: 'Anchor System Synthesis: Exact PAN (Legal), GSTIN (Tax), and Pincode (Geospatial) match. Certainty level maximum.',
+      reasons: ['PAN Match', 'GSTIN Match', 'Pincode Match'],
+      riskFactors: [],
+      ubid_suggestion: 'TARGET_UBID'
+    };
   }
 
-  // Phonetic Name check
-  const soundexA = soundex(recordA.businessName);
-  const soundexB = soundex(recordB.businessName);
-  const phoneticMatch = soundexA === soundexB;
-  if (phoneticMatch && nameScore < 0.9) {
-    reasons.push('Phonetic Name Match (Soundex)');
+  // Exact PAN AND Exact Trade License ID
+  if (panMatch && tradeMatch) {
+    return {
+      score: 98.0,
+      confidence: 0.98,
+      verdict: 'AUTO_MERGE' as const,
+      edge_case_flag: 'NONE' as const,
+      reasoning: 'Legal Anchor (PAN) and Geospatial Anchor (Trade License) match. Confirms occupancy by owner.',
+      reasons: ['PAN Match', 'Trade License Match'],
+      riskFactors: [],
+      ubid_suggestion: 'TARGET_UBID'
+    };
   }
 
-  // 3. Address Similarity
-  const normAddrA = normalizeString(recordA.address);
-  const normAddrB = normalizeString(recordB.address);
-  const addrScore = stringSimilarity(normAddrA, normAddrB);
+  // Exact PAN AND Exact Pincode AND Name Similarity > 85%
+  if (panMatch && pinMatch && nameSim > 0.85) {
+    return {
+      score: 96.0,
+      confidence: 0.96,
+      verdict: 'AUTO_MERGE' as const,
+      edge_case_flag: 'NONE' as const,
+      reasoning: 'PAN and Location match with high name similarity. Reliable for auto-merging missing higher signals.',
+      reasons: ['PAN Match', 'Pincode Match', `Name Similarity (${(nameSim * 100).toFixed(0)}%)`],
+      riskFactors: [],
+      ubid_suggestion: 'TARGET_UBID'
+    };
+  }
+
+  // --- 2. Confidence 70-94 (HUMAN_REVIEW) ---
+
+  // Edge Case 1: The Branch (PAN matches, Locations vary)
+  if (panMatch && !pinMatch) {
+    return {
+      score: 85.0,
+      confidence: 0.85,
+      verdict: 'HUMAN_REVIEW' as const,
+      edge_case_flag: 'BRANCH_NODE' as const,
+      reasoning: 'Legal Anchor matches, but Geospatial discrepancy flags this as a potential Branch. Review required for node assignment.',
+      reasons: ['PAN Match', 'Location Discrepancy'],
+      riskFactors: ['Potential Branch Office'],
+      ubid_suggestion: 'NEW_GEN_REQUIRED'
+    };
+  }
+
+  // Edge Case 2: Multi-Business Owner (PAN/Pincode match, Names vary)
+  if (panMatch && pinMatch && nameSim < 0.6) {
+    return {
+      score: 82.0,
+      confidence: 0.82,
+      verdict: 'HUMAN_REVIEW' as const,
+      edge_case_flag: 'MULTI_BUSINESS' as const,
+      reasoning: 'PAN and Pincode match, but Business Names are completely unrelated. Suggests 2 shops in 1 building owned by 1 person.',
+      reasons: ['PAN Match', 'Location Match', 'Extreme Name Variance'],
+      riskFactors: ['Multi-Business at Single Counter'],
+      ubid_suggestion: 'NEW_GEN_REQUIRED'
+    };
+  }
+
+  // Edge Case 3: Multiple GSTINs (PAN/Location match, GSTINs vary)
+  if (panMatch && pinMatch && gstinA && gstinB && gstinA !== gstinB) {
+    return {
+      score: 88.0,
+      confidence: 0.88,
+      verdict: 'HUMAN_REVIEW' as const,
+      edge_case_flag: 'MULTI_VERTICAL' as const,
+      reasoning: 'PAN and Location match, but Tax Verticals (GSTIN) differ. Suggests multiple registered verticals at one desk.',
+      reasons: ['PAN Match', 'Location Match', 'GSTIN Mismatch'],
+      riskFactors: ['Multiple Tax Verticals'],
+      ubid_suggestion: 'NEW_GEN_REQUIRED'
+    };
+  }
+
+  // Edge Case 4: Missing Legal IDs (No PAN/GSTIN, but strong signals elsewhere)
+  if (!panA && !panB && !gstinA && !gstinB && nameSim > 0.95 && pinMatch && tradeMatch) {
+    return {
+      score: 75.0,
+      confidence: 0.75,
+      verdict: 'HUMAN_REVIEW' as const,
+      edge_case_flag: 'MISSING_IDS' as const,
+      reasoning: 'No Legal IDs provided, but exact Name, Pincode, and Trade License match. High probability of same entity.',
+      reasons: ['Name Match', 'Pincode Match', 'Trade License Match'],
+      riskFactors: ['No Legal Anchor (PAN)'],
+      ubid_suggestion: 'TARGET_UBID'
+    };
+  }
+
+  // --- 2.5 Learned Identity Match (Feedback Loop) ---
+  // If no hard anchors matched but this variation was previously approved
+  if (feedbackBoost > 0 && nameSim > 0.6) {
+    const boostedConfidence = Math.min(0.98, 0.82 + feedbackBoost);
+    return {
+      score: boostedConfidence * 100,
+      confidence: boostedConfidence,
+      verdict: boostedConfidence >= 0.95 ? 'AUTO_MERGE' : 'HUMAN_REVIEW' as any,
+      edge_case_flag: 'NONE' as any,
+      reasoning: 'HUMAN_FEEDBACK_LOOP: This name/address variation has been historically approved in the registry. Logic Engine confidence boosted by passive learning.',
+      reasons: ['Confirmed Alias (Historical)', `Name Similarity (${(nameSim * 100).toFixed(0)}%)`],
+      riskFactors: [],
+      ubid_suggestion: 'TARGET_UBID' as any
+    };
+  }
+
+  // --- 3. Confidence < 70 (ORPHAN) ---
   
-  if (addrScore > 0.8) {
-    reasons.push(`Strong Address Correlation (${(addrScore * 100).toFixed(0)}%)`);
-  }
-
-  // 4. Spatial / PIN Signal
-  const pinMatch = recordA.pinCode === recordB.pinCode;
-  if (pinMatch) {
-    reasons.push('Location/PIN Code Alignment');
-  } else {
-    riskFactors.push('PIN Code Mismatch');
-  }
-
-  // Weighted Calculation
-  let confidence = (nameScore * weights.nameWeight) + 
-                   (addrScore * weights.addressWeight) + 
-                   (pinMatch ? weights.pinWeight : 0);
-  
-  // Bonus for Phonetic if name score is lower
-  if (phoneticMatch && nameScore < 0.7) confidence += 0.1;
-  
-  // Penalty for missing identifiers
-  if (!recordA.gstin || !recordB.gstin) {
-    riskFactors.push('Indirect Anchor (Missing GSTIN)');
-  }
-
-  // Final Clipping
-  confidence = Math.min(0.98, Math.max(0.1, confidence));
-
   return {
-    confidence,
-    reasons: reasons.slice(0, 4),
-    riskFactors: riskFactors.slice(0, 3)
+    score: 50.0,
+    confidence: 0.50,
+    verdict: 'ORPHAN' as const,
+    edge_case_flag: 'NONE' as const,
+    reasoning: 'Default orphan assignment: Insufficient correlation across Anchor System layers.',
+    reasons: nameSim > 0.7 ? ['Partial Name Similarity'] : [],
+    riskFactors: ['Inconclusive Signals'],
+    ubid_suggestion: 'NEW_GEN_REQUIRED'
   };
 };

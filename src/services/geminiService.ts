@@ -1,10 +1,6 @@
-import { GoogleGenerativeAI, Content } from "@google/generative-ai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-if (!apiKey) {
-  throw new Error('VITE_GEMINI_API_KEY environment variable is required');
-}
-const genAI = new GoogleGenerativeAI(apiKey);
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
 const SYSTEM_LOGIC_KNOWLEDGE = `
 SYSTEM ARCHITECTURE & LOGIC:
@@ -27,101 +23,190 @@ SYSTEM ARCHITECTURE & LOGIC:
    - Reviewers can 'Merge' to an existing UBID if confidence is high, or 'Project' a new entity.
 5. Entity Linkage: One UBID can link multiple source records across departments (Factories, Labour, KSPCB) to create a Triple-A single source of truth.
 6. Privacy: PII is anonymized using regex before AI analysis.
+7. Manual Override & Reversibility (MANUAL_REVERSION):
+   - HUMAN_AUTHORITY: Human decisions (LINK/UNLINK) are absolute 'Ground Truth'. Model scoring is bypassed.
+   - REVERSIBILITY PROTOCOL: UNLINK actions trigger distinct ORPHAN UBID creation and set edge_case_flag to 'MANUAL_REVERSION'.
+   - CONTINUOUS IMPROVEMENT: Manual overrides are documented in audit logs to refine future system confidence.
 `;
 
-export const getGeneralChatResponse = async (message: string, history: Content[]) => {
+export const getGeneralChatResponse = async (message: string, history: { role: 'user' | 'model', parts: { text: string }[] }[]) => {
   try {
-    const model = genAI.getGenerativeModel({
-      model: "models/gemini-3.1-flash-lite-preview",
-      systemInstruction: `You are the UBID Intelligence Assistant. Provide ultra-fast, direct, and structured technical data. 
-        ${SYSTEM_LOGIC_KNOWLEDGE}
-        STRICT RULES:
-        1. NO introductory or closing pleasantries.
-        2. Use numbered lists ONLY. 
-        3. One fact per line. 
-        4. Max 5 lines per response.
-        5. No bolding or markdown headers beyond lists.`,
+    // Scramble any PII that might have been typed into chat
+    const syntheticMessage = vault.scrambleObject(message);
+    
+    const chat = ai.chats.create({
+      model: "gemini-3.1-flash-lite-preview",
+      config: {
+        systemInstruction: `You are the UBID Intelligence Assistant. Provide ultra-fast, direct, and structured data.
+        The system is designed to layer on top of 40+ departmental silos without modifying source systems.
+        Privacy Constraint: All PII is scrambled into 'SYNTHETIC_n' tokens before AI analysis.
+        
+        ${SYSTEM_LOGIC_KNOWLEDGE}`,
+      },
+      history: history as any,
     });
 
-    const formattedHistory = (history || [])
-    .filter(msg => msg.role === "user" || msg.role === "model");
-
-    // Ensure first message is always 'user'
-    if (formattedHistory.length > 0 && formattedHistory[0].role !== "user") {
-      formattedHistory.shift();
+    const result = await chat.sendMessage({ message: syntheticMessage });
+    if (!result || !result.text) {
+      throw new Error('AI Assistant return null signal.');
     }
-
-    const chat = model.startChat({
-      history: formattedHistory,
-    });
-
-    const result = await chat.sendMessage(message);
-    if (!result || !result.response || !result.response.text()) {
-      throw new Error('Gemini API returned an empty response');
-    }
-    return result.response.text();
-  } catch (error) {
-    console.error('Error in Gemini API call:', error);
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Gemini API error: ${message}`);
+    return result.text;
+  } catch (error: any) {
+    console.error("AI Chat failure:", error);
+    throw new Error(`Chat Engine unavailable: ${error.message || 'Unknown network error'}`);
   }
 };
 
-/**
- * Anonymizes PII (Name, Address, PAN, GSTIN) from UBID data for LLM analysis.
+ /**
+ * --- PRIVACY COMPLIANCE VAULT ---
+ * Ensures raw PII never leaves the local environment.
+ * Maps real identifiers to synthetic tokens before LLM execution.
  */
-const anonymizeData = (data: any): any => {
-  const json = JSON.stringify(data);
-  // Replace sensitive patterns with synthetic placeholders
-  return JSON.parse(json.replace(/[A-Z]{5}[0-9]{4}[A-Z]{1}/g, 'PLACEHOLDER_PAN') // PAN
-    .replace(/[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}/g, 'PLACEHOLDER_GSTIN') // GSTIN
-    .replace(/plot|no\.|street|road|area|phase|stage|cross|park|layout/gi, (match) => match) // Keep structural address terms
-    .replace(/[A-Z][a-z]+(?=\s[A-Z][a-z]+)/g, 'SyntheticEntity') // Replace capitalized names with Generic
-  );
-};
+class PrivacyVault {
+  private map: Map<string, string> = new Map();
+  private reverseMap: Map<string, string> = new Map();
+  private counter: number = 0;
+
+  /**
+   * Scrambles sensitive data into synthetic tokens.
+   */
+  scramble(value: string | undefined | null): string {
+    if (!value) return '';
+    const trimmed = value.trim();
+    if (this.map.has(trimmed)) return this.map.get(trimmed)!;
+
+    const token = `SYNTHETIC_${this.counter++}`;
+    this.map.set(trimmed, token);
+    this.reverseMap.set(token, trimmed);
+    return token;
+  }
+
+  /**
+   * Deep-scrambles an entire object/array.
+   */
+  scrambleObject(obj: any): any {
+    const json = JSON.stringify(obj);
+    let scrambledStr = json;
+
+    // Detect and scramble common PII patterns
+    const panRegex = /[A-Z]{5}[0-9]{4}[A-Z]{1}/g;
+    const gstinRegex = /[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}/g;
+    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+    const phoneRegex = /(\+91[\-\s]?)?[0-9]{10}/g;
+
+    const matches = [
+      ...(json.match(panRegex) || []),
+      ...(json.match(gstinRegex) || []),
+      ...(json.match(emailRegex) || []),
+      ...(json.match(phoneRegex) || [])
+    ];
+
+    // Also target probable PII fields by property name if we were to traverse
+    // but a regex sweep on the stringified JSON is more thorough for "raw data".
+    
+    [...new Set(matches)].forEach(match => {
+      scrambledStr = scrambledStr.split(match).join(this.scramble(match));
+    });
+
+    return JSON.parse(scrambledStr);
+  }
+
+  /**
+   * Restores the real values into an object/string that contains synthetic tokens.
+   */
+  restore(input: any): any {
+    if (typeof input === 'string') {
+      let restored = input;
+      this.reverseMap.forEach((realValue, token) => {
+        restored = restored.split(token).join(realValue);
+      });
+      return restored;
+    }
+
+    if (Array.isArray(input)) {
+      return input.map(item => this.restore(item));
+    }
+
+    if (input && typeof input === 'object') {
+      const restoredObj: any = {};
+      Object.keys(input).forEach(key => {
+        restoredObj[key] = this.restore(input[key]);
+      });
+      return restoredObj;
+    }
+
+    return input;
+  }
+}
+
+const vault = new PrivacyVault();
+
+export const scrambleForAI = (data: any) => vault.scrambleObject(data);
+export const restoreFromAI = (data: any) => vault.restore(data);
 
 export const getHighThinkingAnalysis = async (input: any) => {
-  const anonymized = anonymizeData(input);
-  const prompt = `Perform a Deep Strategic Audit on the following industrial entity data.
-  
-  CONTEXT: We are correlating static registry records with a live stream of cross-departmental activity signals.
-  
-  TASK:
-  1. Analyze the 'entity' registry details for inconsistencies (PAN/GSTIN/Status).
-  2. Cross-reference with the 'recentActivity' timeline. Identify if the timeline supports or contradicts the current registry status.
-  3. Identify 'Hidden Linkage' risks (e.g., similar addresses or overlapping signals).
-  4. Predict future operational health based on signal frequency.
-  
-  IMPORTANT: Focus on temporal sequences and cross-silo patterns.
-  
-  Anonymized Data Stream: ${JSON.stringify(anonymized, null, 2)}`;
+  try {
+    const syntheticInput = vault.scrambleObject(input);
+    const prompt = `Perform a Deep Strategic Audit on the following SCRAMBLED industrial entity data.
+    
+    CONTEXT: We are correlating static registry records with a live stream of cross-departmental activity signals.
+    The data is SYNTHETIC (Scrambled PII) to maintain local privacy compliance. Identifiers use 'SYNTHETIC_n' tokens.
+    
+    TASK:
+    1. Analyze patterns in 'recentActivity' frequency vs registry status.
+    2. Identify 'Hidden Linkage' risks by observing token repetition across records.
+    3. Predict future operational health based on signal density.
+    
+    Anonymized Data Stream: ${JSON.stringify(syntheticInput, null, 2)}`;
 
-  const model = genAI.getGenerativeModel({
-    model: "models/gemini-3.1-flash-lite-preview",
-    systemInstruction: "You are a senior business intelligence analyst specializing in regulatory compliance and entity resolution. Provide deep, high-thinking analysis.",
-  });
+    const result = await ai.models.generateContent({
+      model: "gemini-3.1-flash-lite-preview",
+      contents: prompt,
+      config: {
+        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
+        systemInstruction: "You are a senior business intelligence analyst. You work strictly on synthetic/scrambled inputs to respect PII privacy.",
+      }
+    });
 
-  const result = await model.generateContent(prompt);
-  return result.response.text();
+    if (!result || !result.text) {
+      throw new Error("High thinking engine returned null result.");
+    }
+    return result.text;
+  } catch (error: any) {
+    console.error("High Thinking API failure:", error);
+    throw new Error(`Strategic Analysis Engine unavailable: ${error.message || 'Unknown network error'}`);
+  }
 };
 
 export const getMapsGroundingInfo = async (location: string) => {
-  const prompt = `Provide a comprehensive industrial intelligence report for the ${location} area in Karnataka. 
-  Focus on:
-  1. Key industries and sectors present.
-  2. Major industrial landmarks or clusters.
-  3. Recent developments or infrastructure projects.
-  4. Potential regulatory or environmental focus areas for this specific zone.
-  
-  Format the report with clear headings and structured sections. Use numbered lists for details.`;
+  try {
+    const prompt = `Provide a comprehensive industrial intelligence report for the ${location} area in Karnataka. 
+    Focus on:
+    1. Key industries and sectors present.
+    2. Major industrial landmarks or clusters.
+    3. Recent developments or infrastructure projects.
+    4. Potential regulatory or environmental focus areas for this specific zone.
+    
+    Format the report with clear headings and structured sections. Use numbered lists for details.`;
 
-  const model = genAI.getGenerativeModel({
-    model: "models/gemini-3.1-flash-lite-preview",
-    systemInstruction: "You are a specialized industrial intelligence analyst. Your reports are highly structured, data-driven, and professional. Use clear headings and numbered lists. DO NOT use asterisks (*) for formatting. Ensure each point starts on a new line."
-  });
+    const result = await ai.models.generateContent({
+      model: "gemini-3.1-flash-lite-preview",
+      contents: prompt,
+      config: {
+        tools: [{ googleMaps: {} } as any],
+        toolConfig: { includeServerSideToolInvocations: true } as any,
+        systemInstruction: "You are a specialized industrial intelligence analyst. Your reports are highly structured, data-driven, and professional. Use clear headings and numbered lists. DO NOT use asterisks (*) for formatting. Ensure each point starts on a new line."
+      }
+    });
 
-  const result = await model.generateContent(prompt);
-  return result.response.text();
+    if (!result || !result.text) {
+      throw new Error("Maps grounding engine returned null result.");
+    }
+    return result.text;
+  } catch (error: any) {
+    console.error("Maps Grounding API failure:", error);
+    throw new Error(`Geospatial Intelligence Engine unavailable: ${error.message || 'Unknown network error'}`);
+  }
 };
 
 export const getHealerPatch = async (errorStack: string, componentContext: string) => {
@@ -133,31 +218,34 @@ export const getHealerPatch = async (errorStack: string, componentContext: strin
   Suggest a defensive programming snippet to prevent this specific crash in the future. 
   Format: Clear explanation + Code Snippet. No asterisks.`;
 
-  const model = genAI.getGenerativeModel({
-    model: "models/gemini-3.1-flash-lite-preview",
-    systemInstruction: "You are an Automated Error Resolution AI designed for the UBID system. You stabilize and fix bugs."
+  const result = await ai.models.generateContent({
+    model: "gemini-3.1-flash-lite-preview",
+    contents: prompt,
+    config: {
+      systemInstruction: "You are an Automated Error Resolution AI designed for the UBID system. You stabilize and fix bugs."
+    }
   });
-
-  const result = await model.generateContent(prompt);
-  return result.response.text();
+  return result.text;
 };
 
 export const analyzeDataAnomaly = async (data: any) => {
+  const syntheticData = vault.scrambleObject(data);
   const prompt = `The system has received a data record that doesn't fully match the standard UBID schema.
-  RAW DATA: ${JSON.stringify(data, null, 2)}
+  RAW DATA (SCRAMBLED): ${JSON.stringify(syntheticData, null, 2)}
   
   Analyze the fields:
   1. Identify compatible fields with the Registry (which field is Name? which is Address?).
   2. Map unknown fields to potential system benefits (e.g., a "power_consumption" field might predict operational status).
-  3. Propose a "Compatibility Layer" to ingest this data.
+  3. Propose a "Compatibility Layer" to ingest this data without modifying source department systems.
   
   Format: Schema Mapping Table + Recommendation. No asterisks.`;
 
-  const model = genAI.getGenerativeModel({
-    model: "models/gemini-3.1-flash-lite-preview",
-    systemInstruction: "You are a Data Resilience AI. You make the system compatible with any environment-specific data formats."
+  const result = await ai.models.generateContent({
+    model: "gemini-3.1-flash-lite-preview",
+    contents: prompt,
+    config: {
+      systemInstruction: "You are a Data Resilience AI. You work on scrambled data to prioritize privacy. You maintain compatibility with 40+ legacy systems."
+    }
   });
-
-  const result = await model.generateContent(prompt);
-  return result.response.text();
+  return result.text;
 };

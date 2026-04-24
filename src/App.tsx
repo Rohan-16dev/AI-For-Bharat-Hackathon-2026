@@ -18,6 +18,8 @@ import {
   ArrowRight,
   MapPin,
   Building2,
+  Calculator,
+  HardHat,
   FileText,
   Sparkles,
   ExternalLink,
@@ -27,13 +29,20 @@ import {
   Fingerprint,
   ShieldCheck,
   RefreshCcw,
+  RotateCcw,
   Zap,
-  Link2Off,
-  MousePointer2,
-  Settings,
   Shield,
+  ShieldAlert,
+  AlertTriangle,
+  Microscope,
+  Link2Off,
+  Settings,
+  MoreVertical,
+  MousePointer2,
   FileSearch,
-  Lock
+  Lock,
+  Bell,
+  BellRing
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -57,13 +66,15 @@ import { cn } from './lib/utils';
 import { MOCK_UBIDS, MOCK_EVENTS, generateMockData } from './mockData';
 import { SelfHealingBridge } from './components/SelfHealingBridge';
 import { SchemaEvolutionTool } from './components/SchemaEvolutionTool';
-import { UBIDRecord, ActivityEvent, Department, MatchSuggestion, StatusChange, SystemKnowledge, SourceRecord, AuditEntry } from './types';
-import { resolveUBIDs } from './services/ubidService';
+import { UBIDRecord, ActivityEvent, Department, MatchSuggestion, StatusChange, SystemKnowledge, SourceRecord, AuditEntry, AppNotification } from './types';
+import { resolveUBIDs, generateUnifiedBusinessIdentifier, promoteUBID, adjustSystemWeights, createBaseUBID, getUnitRole } from './services/ubidService';
+import { cleanBusinessData } from './services/aiNormalizationService';
 import { inferBusinessStatus, findOrphanEvents, StatusVerdict } from './services/statusInferenceService';
 import { compareRecords, normalizeString } from './services/fuzzyMatchingService';
 import { GeminiChat } from './components/GeminiChat';
 import { ThinkingAssistant } from './components/ThinkingAssistant';
 import { getMapsGroundingInfo } from './services/geminiService';
+import { NotificationManager } from './components/NotificationManager';
 
 // --- Components ---
 
@@ -82,33 +93,44 @@ const StatCard = React.memo(({ title, value, icon: Icon, color }: { title: strin
 
 StatCard.displayName = 'StatCard';
 
-const Dashboard = ({ ubids, events }: { ubids: UBIDRecord[], events: ActivityEvent[] }) => {
+const Dashboard = ({ 
+  ubids, 
+  events,
+  addNotification
+}: { 
+  ubids: UBIDRecord[], 
+  events: ActivityEvent[],
+  addNotification?: (title: string, message: string, type: AppNotification['type']) => void
+}) => {
   const [mapsInfo, setMapsInfo] = useState<string | null>(null);
   const [isMapsLoading, setIsMapsLoading] = useState(false);
 
   const handleFetchMapsInfo = async () => {
     setIsMapsLoading(true);
+    addNotification?.("Geospatial Query", "Fetching local industrial intelligence for Peenya...", "info");
     try {
       const info = await getMapsGroundingInfo('Peenya Industrial Area');
-      setMapsInfo(info || null);
-    } catch (err) {
+      setMapsInfo(info);
+      addNotification?.("Intelligence Updated", "Geospatial data for Peenya synchronized.", "success");
+    } catch (err: any) {
       console.error(err);
+      addNotification?.("Maps Query Failed", `Grounding engine error: ${err.message || 'Unknown network error'}`, "error");
     } finally {
       setIsMapsLoading(false);
     }
   };
 
   const statusCounts = useMemo(() => {
-    const counts = { Active: 0, Dormant: 0, Closed: 0 };
+    const counts = { ACTIVE: 0, DORMANT: 0, CLOSED: 0 };
     ubids.forEach(u => {
-      if (u.status === 'Active') counts.Active++;
-      else if (u.status === 'Dormant') counts.Dormant++;
-      else if (u.status === 'Closed') counts.Closed++;
+      if (u.status === 'ACTIVE') counts.ACTIVE++;
+      else if (u.status === 'DORMANT') counts.DORMANT++;
+      else if (u.status === 'CLOSED') counts.CLOSED++;
     });
     return [
-      { name: 'Active', value: counts.Active, color: '#38A169' },
-      { name: 'Dormant', value: counts.Dormant, color: '#D69E2E' },
-      { name: 'Closed', value: counts.Closed, color: '#E53E3E' },
+      { name: 'ACTIVE', value: counts.ACTIVE, color: '#38A169' },
+      { name: 'DORMANT', value: counts.DORMANT, color: '#D69E2E' },
+      { name: 'CLOSED', value: counts.CLOSED, color: '#E53E3E' },
     ];
   }, [ubids]);
 
@@ -127,7 +149,7 @@ const Dashboard = ({ ubids, events }: { ubids: UBIDRecord[], events: ActivityEve
     ubids.forEach(u => {
       if (!pinCounts[u.pinCode]) pinCounts[u.pinCode] = { count: 0, active: 0 };
       pinCounts[u.pinCode].count++;
-      if (u.status === 'Active') pinCounts[u.pinCode].active++;
+      if (u.status === 'ACTIVE') pinCounts[u.pinCode].active++;
     });
     
     return Object.entries(pinCounts)
@@ -164,9 +186,15 @@ const Dashboard = ({ ubids, events }: { ubids: UBIDRecord[], events: ActivityEve
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title="Total UBIDs" value={ubids.length.toLocaleString()} icon={Database} color="bg-accent" />
-        <StatCard title="Active Businesses" value={statusCounts.find(s => s.name === 'Active')?.value.toLocaleString() || '0'} icon={Activity} color="bg-status-active" />
-        <StatCard title="Compliance Health" value={`${((statusCounts.find(s => s.name === 'Active')?.value || 0) / (ubids.length || 1) * 100).toFixed(1)}%`} icon={Shield} color="bg-status-active" />
-        <StatCard title="Orphan Signals" value={events.filter(e => !ubids.find(u => u.ubid === e.ubid)).length} icon={AlertCircle} color="bg-status-closed" />
+        <StatCard title="Active Businesses" value={statusCounts.find(s => s.name === 'ACTIVE')?.value.toLocaleString() || '0'} icon={Activity} color="bg-status-active" />
+        <StatCard title="Complex Entities" value={ubids.filter(u => u.edgeCaseFlag && u.edgeCaseFlag !== 'NONE').length} icon={AlertTriangle} color="bg-red-500" />
+        <StatCard title="Compliance Health" value={`${((statusCounts.find(s => s.name === 'ACTIVE')?.value || 0) / (ubids.length || 1) * 100).toFixed(1)}%`} icon={Shield} color="bg-status-active" />
+        <StatCard 
+          title="Orphan Signals" 
+          value={findOrphanEvents(events, ubids).length} 
+          icon={AlertCircle} 
+          color="bg-status-closed" 
+        />
       </div>
 
       {/* Grid Analysis */}
@@ -284,21 +312,21 @@ const Dashboard = ({ ubids, events }: { ubids: UBIDRecord[], events: ActivityEve
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="p-3 bg-white rounded border border-blue-100">
-              <p className="text-[10px] font-bold text-accent uppercase mb-1">Entity Resolution</p>
+              <p className="text-[10px] font-bold text-accent uppercase mb-1">Integrity Resolution</p>
               <p className="text-xs text-text-main leading-relaxed">
-                AI has identified a <span className="font-bold text-status-active">14% increase</span> in cross-departmental matches this month. 428 records are currently awaiting manual verification in the high-confidence tier.
+                <span className="font-bold text-status-active">{ubids.filter(u => u.riskScore > 30).length} entities</span> flagged with Elevated Risk (&gt;30%). The primary driver is <span className="font-bold text-accent">Status Drift</span> across industrial power signals.
               </p>
             </div>
             <div className="p-3 bg-white rounded border border-blue-100">
-              <p className="text-[10px] font-bold text-accent uppercase mb-1">Compliance Risk</p>
+              <p className="text-[10px] font-bold text-accent uppercase mb-1">Structural Complexity</p>
               <p className="text-xs text-text-main leading-relaxed">
-                <span className="font-bold text-status-closed">8.2% of businesses</span> in the Peenya cluster show no activity signals for 18+ months. Recommended action: Targeted inspections for potential dormant entities.
+                <span className="font-bold text-orange-600">{ubids.filter(u => u.edgeCaseFlag && u.edgeCaseFlag !== 'NONE').length} Complex Nodes</span> identified. {ubids.filter(u => u.edgeCaseFlag === 'MULTI_BUSINESS').length} instances of Ownership Overlap require manual geospatial verification.
               </p>
             </div>
             <div className="p-3 bg-white rounded border border-blue-100">
-              <p className="text-[10px] font-bold text-accent uppercase mb-1">Data Integrity</p>
+              <p className="text-[10px] font-bold text-accent uppercase mb-1">Tax Vertical Health</p>
               <p className="text-xs text-text-main leading-relaxed">
-                PAN/GSTIN linkage has reached <span className="font-bold text-status-active">92% coverage</span>. Missing identifiers are primarily concentrated in the 'Shop & Establishment' sector (approx. 1,200 records).
+                GSTIN linkage is at <span className="font-bold text-status-active">{((ubids.filter(u => u.gstin).length / ubids.length) * 100).toFixed(1)}%</span>. Automated cross-mapping has projected <span className="font-bold text-red-600">3.2% missing revenue</span> signals due to unlinked 'Shop & Establishment' records.
               </p>
             </div>
           </div>
@@ -354,247 +382,152 @@ const Dashboard = ({ ubids, events }: { ubids: UBIDRecord[], events: ActivityEve
 // --- Mock Data for Reviewer Queue ---
 const INITIAL_SUGGESTIONS: MatchSuggestion[] = [
   {
-    id: 'S1',
+    id: 'SUG-001',
     confidence: 0.94,
     priority: 'High',
+    verdict: 'HUMAN_REVIEW',
     status: 'Pending',
     recordA: {
-      id: 'F101',
-      department: 'Factories',
-      businessName: 'SRI LAKSHMI ENTERPRISES',
-      address: 'PLOT 45, 2ND PHASE, PEENYA IND AREA',
+      id: 'SYN-001',
+      department: 'Shop & Establishment (BBMP)',
+      businessName: 'Sri Lakshmi Enterprises',
+      address: 'Plot 45, 2nd Phase, Peenya Industrial Area',
       pinCode: '560058',
-      ownerName: 'White Hawk Coders',
-      phone: '+91 98450 12345',
-      email: 'ramesh@lakshmient.com',
-      gstin: '29AAAAA0000A1Z5'
+      ownerName: 'Lokesh Gowda',
+      pan: 'ABCDE1234F',
+      status: 'ACTIVE'
     },
     recordB: {
-      id: 'L202',
-      department: 'Labour',
-      businessName: 'LAXMI ENT.',
-      address: '45, PEENYA 2ND PHASE, BANGALORE',
+      id: 'SYN-002',
+      department: 'Factories & Boilers',
+      businessName: 'Lakshmi Ent.',
+      address: 'No 45, Peenya 2nd PH, Bangalore',
       pinCode: '560058',
-      ownerName: 'White Hawk C',
-      phone: '9845012345',
-      email: 'admin@lakshmient.com',
-      gstin: '29AAAAA0000A1Z5'
+      ownerName: 'Lokesh Gowda',
+      pan: 'ABCDE1234F',
+      status: 'ACTIVE'
     },
-    reasons: ['GSTIN Exact Match', 'Address similarity: 94%', 'Name phonetic match: 88%', 'Owner name match: 91%'],
-    confidenceBreakdown: { name: 0.88, address: 0.94, location: 1.0 },
-    riskFactors: ['Minor address discrepancy', 'Owner name abbreviation']
+    reasons: ['Legal Anchor (PAN) Match', 'Geospatial Anchor (Pincode) Match', 'Name similarity: 88%'],
+    confidenceBreakdown: { name: 0.88, address: 0.92, location: 1.0 },
+    riskFactors: ['Address Abbreviation detected']
   },
   {
-    id: 'S2',
-    confidence: 0.76,
-    priority: 'Medium',
-    status: 'Pending',
-    recordA: {
-      id: 'SE303',
-      department: 'Shop & Establishment',
-      businessName: 'MODERN TEXTILE MILLS',
-      address: 'SY NO 89, WHITEFIELD MAIN RD',
-      pinCode: '560066',
-      ownerName: 'ANITA SINGH',
-      phone: '+91 80 2839 4455',
-      email: 'info@moderntextiles.in',
-      gstin: '29BBBBB1111B1Z2'
-    },
-    recordB: {
-      id: 'P404',
-      department: 'KSPCB',
-      businessName: 'MODERN TEXTILES',
-      address: '89, MAIN RD, WHITEFIELD',
-      pinCode: '560066',
-      ownerName: 'ANITA S',
-      phone: '080-28394455',
-      email: 'anita.s@moderntextiles.in',
-      gstin: 'Pending'
-    },
-    reasons: ['PIN Code match', 'Name similarity: 82%', 'Address similarity: 78%', 'Phone number match'],
-    confidenceBreakdown: { name: 0.82, address: 0.78, location: 1.0 },
-    riskFactors: ['Missing GSTIN in Record B', 'Address format variation']
-  },
-  {
-    id: 'S3',
-    confidence: 0.88,
-    priority: 'High',
-    status: 'Pending',
-    recordA: {
-      id: 'TL505',
-      department: 'Shop & Establishment', // BBMP Trade License
-      businessName: 'PRECISION TOOLS PVT LTD',
-      address: 'NO 12, 4TH CROSS, RAJAJINAGAR',
-      pinCode: '560010',
-      ownerName: 'VIJAY BHASKAR',
-      phone: '+91 99000 88776',
-      email: 'v.bhaskar@precision.com',
-      gstin: '29CCCCC2222C1Z9'
-    },
-    recordB: {
-      id: 'CT606',
-      department: 'Factories', // Commercial Taxes
-      businessName: 'PRECISION TOOLS PRIVATE LIMITED',
-      address: '12, 4TH CROSS, RAJAJINAGAR, BENGALURU',
-      pinCode: '560010',
-      ownerName: 'VIJAY BHASKAR',
-      phone: '9900088776',
-      email: 'accounts@precisiontools.com',
-      gstin: '29CCCCC2222C1Z9'
-    },
-    reasons: ['GSTIN Exact Match', 'Owner Name Exact Match', 'Address similarity: 98%'],
-    confidenceBreakdown: { name: 1.0, address: 0.98, location: 1.0 },
-    riskFactors: ['None - High Integrity Match']
-  },
-  {
-    id: 'S4',
-    confidence: 0.92,
-    priority: 'High',
-    status: 'Pending',
-    recordA: {
-      id: 'BE707',
-      department: 'BESCOM',
-      businessName: 'GALAXY PLASTICS',
-      address: 'PLOT 12, KIADB INDUSTRIAL AREA, BOMMASANDRA',
-      pinCode: '560099',
-      ownerName: 'RAJESH MEHTA',
-      phone: '080-27831122',
-      email: 'info@galaxyplastics.com',
-      gstin: '29DDDDD3333D1Z8'
-    },
-    recordB: {
-      id: 'PC808',
-      department: 'KSPCB',
-      businessName: 'GALAXY PLASTICS PVT LTD',
-      address: '12, KIADB INDL AREA, BOMMASANDRA',
-      pinCode: '560099',
-      ownerName: 'RAJESH M',
-      phone: '27831122',
-      email: 'compliance@galaxyplastics.com',
-      gstin: '29DDDDD3333D1Z8'
-    },
-    reasons: ['GSTIN Exact Match', 'Phone Suffix Match', 'Address similarity: 91%'],
-    riskFactors: ['Legal entity suffix variation']
-  },
-  {
-    id: 'S5',
-    confidence: 0.68,
-    priority: 'Low',
-    status: 'Pending',
-    recordA: {
-      id: 'L909',
-      department: 'Labour',
-      businessName: 'SUNRISE BAKERY',
-      address: '456, 10TH MAIN, JAYANAGAR 4TH BLOCK',
-      pinCode: '560011',
-      ownerName: 'MOHAMMED ARSHAD',
-      phone: '+91 98860 55443',
-      email: 'arshad@sunrise.in',
-      gstin: '29EEEEE4444E1Z7'
-    },
-    recordB: {
-      id: 'TL010',
-      department: 'Shop & Establishment',
-      businessName: 'SUNRISE FOODS',
-      address: '456, JAYANAGAR 4TH BLOCK, BANGALORE',
-      pinCode: '560011',
-      ownerName: 'SARA ARSHAD',
-      phone: '9886055443',
-      email: 'sara@sunrise.in',
-      gstin: 'Pending'
-    },
-    reasons: ['Address Match', 'Phone Number Match', 'Email Domain Match'],
-    riskFactors: ['Different Owner Name', 'Business Name Variation']
-  },
-  {
-    id: 'S6',
+    id: 'SUG-002',
     confidence: 0.82,
     priority: 'Medium',
+    verdict: 'HUMAN_REVIEW',
     status: 'Pending',
     recordA: {
-      id: 'F111',
-      department: 'Factories',
-      businessName: 'OMEGA ENGINEERING WORKS',
-      address: 'C-234, 2ND STAGE, PEENYA',
+      id: 'SYN-003',
+      department: 'Commercial Taxes (GST)',
+      businessName: 'Singh Tech Solutions',
+      address: 'No 1, 1st Floor, Main Road, Peenya',
       pinCode: '560058',
-      ownerName: 'KIRAN DESAI',
-      phone: '+91 94480 66778',
-      email: 'kiran@omegaeng.com',
-      gstin: '29FFFFF5555F1Z6'
+      pan: 'ABCDE9999Z',
+      ownerName: 'Vikram Singh',
+      status: 'ACTIVE'
     },
     recordB: {
-      id: 'CT212',
-      department: 'Factories',
-      businessName: 'OMEGA ENGG WORKS',
-      address: 'C-234, PEENYA 2ND STAGE',
+      id: 'SYN-004',
+      department: 'Shop & Establishment (BBMP)',
+      businessName: 'Star Cafe & Bakery',
+      address: 'No 1, Ground Floor, Main Road, Peenya',
       pinCode: '560058',
-      ownerName: 'KIRAN D',
-      phone: '9448066778',
-      email: 'accounts@omegaeng.com',
-      gstin: '29FFFFF5555F1Z6'
+      pan: 'ABCDE9999Z',
+      ownerName: 'Vikram Singh',
+      status: 'ACTIVE'
     },
-    reasons: ['GSTIN Exact Match', 'Phone Match', 'Address similarity: 95%'],
-    riskFactors: ['Abbreviated Business Name']
+    reasons: ['Legal Anchor (PAN) Match', 'Geospatial Anchor (Pincode) Match', 'Business Profile Mismatch (Multi-Vertical)'],
+    confidenceBreakdown: { name: 0.25, address: 0.95, location: 1.0 },
+    riskFactors: ['Multi-business at same physical counter']
   },
   {
-    id: 'S7',
-    confidence: 0.74,
+    id: 'SUG-003',
+    confidence: 0.78,
     priority: 'Medium',
+    verdict: 'HUMAN_REVIEW',
     status: 'Pending',
     recordA: {
-      id: 'SE313',
-      department: 'Shop & Establishment',
-      businessName: 'BLUE CHIP SOLUTIONS',
-      address: 'NO 78, 3RD FLOOR, MG ROAD',
-      pinCode: '560001',
-      ownerName: 'SANJAY RAO',
-      phone: '+91 80 4123 9988',
-      email: 'sanjay@bluechip.com',
-      gstin: '29GGGGG6666G1Z5'
+      id: 'SYN-007',
+      department: 'KSPCB (Pollution Control)',
+      businessName: 'Green Valley Agro Processing',
+      address: 'No 124, Bagalur Road, Yelahanka',
+      pinCode: '560063',
+      ownerName: 'Meena S.',
+      status: 'ACTIVE'
     },
     recordB: {
-      id: 'L414',
-      department: 'Labour',
-      businessName: 'BLUECHIP SOLUTIONS',
-      address: '78, MG ROAD, BENGALURU',
-      pinCode: '560001',
-      ownerName: 'SANJAY R',
-      phone: '41239988',
-      email: 'hr@bluechip.com',
-      gstin: 'Pending'
+      id: 'SYN-008',
+      department: 'Labour Department',
+      businessName: 'Green Valley Agricultural Products',
+      address: '124, Bagalur RD, Yelahanka',
+      pinCode: '560063',
+      ownerName: 'Meena S.',
+      status: 'ACTIVE'
     },
-    reasons: ['Address similarity: 88%', 'Phone suffix match', 'Name phonetic match'],
-    riskFactors: ['Missing GSTIN', 'Name spacing variation']
+    reasons: ['Geospatial Anchor Match', 'Phonetic Name Match', 'Owner Name Match'],
+    confidenceBreakdown: { name: 0.84, address: 0.81, location: 1.0 },
+    riskFactors: ['Missing Legal IDs (No PAN/GSTIN)']
   },
   {
-    id: 'S8',
-    confidence: 0.96,
+    id: 'SUG-004',
+    confidence: 0.92,
     priority: 'High',
+    verdict: 'HUMAN_REVIEW',
     status: 'Pending',
     recordA: {
-      id: 'P515',
-      department: 'KSPCB',
-      businessName: 'ROYAL PHARMA LTD',
-      address: 'SURVEY NO 112, JIGANI INDL AREA',
-      pinCode: '56105',
-      ownerName: 'DR. AMIT PATEL',
-      phone: '+91 99800 11223',
-      email: 'amit@royalpharma.com',
-      gstin: '29HHHHH7777H1Z4'
+      id: 'SYN-009',
+      department: 'Commercial Taxes (GST)',
+      businessName: 'Modern Textile Mills',
+      address: 'Sector 3, HSR Layout',
+      pinCode: '560102',
+      pan: 'MODRN1122J',
+      ownerName: 'Suresh Raina',
+      status: 'ACTIVE'
     },
     recordB: {
-      id: 'F616',
-      department: 'Factories',
-      businessName: 'ROYAL PHARMACEUTICALS LIMITED',
-      address: 'SY NO 112, JIGANI INDUSTRIAL AREA',
-      pinCode: '56105',
-      ownerName: 'AMIT PATEL',
-      phone: '9980011223',
-      email: 'compliance@royalpharma.com',
-      gstin: '29HHHHH7777H1Z4'
+      id: 'SYN-010',
+      department: 'KSPCB (Pollution Control)',
+      businessName: 'Modern Textiles',
+      address: 'Sector 3, HSR Layout, BLR',
+      pinCode: '560102',
+      pan: 'MODRN1122J',
+      ownerName: 'Suresh Raina',
+      status: 'DORMANT'
     },
-    reasons: ['GSTIN Exact Match', 'Phone Match', 'Address similarity: 97%'],
-    riskFactors: ['None - High Integrity Match']
+    reasons: ['Legal Anchor (PAN) Match', 'Geospatial Anchor Match', 'Identical Owner'],
+    confidenceBreakdown: { name: 0.96, address: 0.94, location: 1.0 },
+    riskFactors: ['Operational Status Drift: Active vs Dormant']
+  },
+  {
+    id: 'SUG-005',
+    confidence: 0.45,
+    priority: 'Low',
+    verdict: 'ORPHAN',
+    status: 'Pending',
+    recordA: {
+      id: 'SYN-015',
+      department: 'Labour Department',
+      businessName: 'Karnataka Food Court',
+      address: 'Terminal 1, KIA',
+      pinCode: '560300',
+      pan: 'FOODC1111A',
+      ownerName: 'Zeeshan Ali',
+      status: 'ACTIVE'
+    },
+    recordB: {
+      id: 'SYN-016',
+      department: 'Factories & Boilers',
+      businessName: 'Karnataka Food Court',
+      address: 'Terminal 1, Kempegowda Intl Airport',
+      pinCode: '560300',
+      pan: 'FOOOD2222B',
+      ownerName: 'Mahesh B.',
+      status: 'ACTIVE'
+    },
+    reasons: ['Name Collision Detected', 'Geospatial Proximity Match'],
+    confidenceBreakdown: { name: 1.0, address: 0.88, location: 1.0 },
+    riskFactors: ['IDENTITY COLLISION: PANs do not match', 'Different Owners']
   }
 ];
 
@@ -626,14 +559,16 @@ const CentralUBIDRegistry = ({
   onUpdateStatus,
   onUnlinkRecord,
   onResolveOrphans,
+  onAddNotification,
   knowledge,
   events
 }: { 
   ubids: UBIDRecord[], 
   setUbids: React.Dispatch<React.SetStateAction<UBIDRecord[]>>,
-  onUpdateStatus?: (ubidId: string, status: 'Active' | 'Dormant' | 'Closed', reason: string) => void,
+  onUpdateStatus?: (ubidId: string, status: 'ACTIVE' | 'DORMANT' | 'CLOSED', reason: string) => void,
   onUnlinkRecord?: (ubidId: string, recordId: string) => void,
   onResolveOrphans?: () => void,
+  onAddNotification?: (title: string, message: string, type: AppNotification['type']) => void,
   knowledge: SystemKnowledge,
   events: ActivityEvent[]
 }) => {
@@ -666,14 +601,37 @@ const CentralUBIDRegistry = ({
     });
   }, [ubids, searchTerm, anchorFilter]);
 
-  const runResolution = () => {
+  const runResolution = async () => {
     setIsProcessing(true);
-    setTimeout(() => {
+    onAddNotification?.("Resolution Started", "Synchronizing 40+ departmental data sources...", "info");
+    
+    try {
+      // 1. Fetch raw data from heterogeneous sources
       const { sourceRecords } = generateMockData();
-      const resolved = resolveUBIDs(sourceRecords, knowledge);
+      
+      // 2. AI NORMALIZATION: Clean and standardize messy data using LLM
+      const cleanedRecords = await Promise.all(sourceRecords.map(async (r) => {
+        try {
+          if (r.businessName === r.businessName.toUpperCase() || !r.pan) {
+            return await cleanBusinessData(r) as SourceRecord;
+          }
+          return r;
+        } catch (e) {
+          console.warn("AI Cleaning failed for record:", r.id, e);
+          return r;
+        }
+      }));
+      
+      // 3. DETERMINISTIC LOGIC ENGINE: Final linkage resolution
+      const resolved = resolveUBIDs(cleanedRecords, knowledge, events);
       setUbids(resolved);
+      onAddNotification?.("Resolution Complete", `${resolved.length} business identities reconciled.`, "success");
+    } catch (error: any) {
+      console.error("Resolution flow error:", error);
+      onAddNotification?.("Resolution Failed", `Engine error: ${error.message || 'Unknown discrepancy'}`, "error");
+    } finally {
       setIsProcessing(false);
-    }, 1500);
+    }
   };
 
   return (
@@ -734,7 +692,7 @@ const CentralUBIDRegistry = ({
               </div>
             </div>
             <button 
-              onClick={() => onResolveOrphans?.()}
+              onClick={() => onResolveOrphans()}
               className="px-3 py-1.5 bg-red-600 text-white text-[10px] font-bold rounded shadow hover:bg-red-700 transition-colors uppercase tracking-wider"
             >
               Resolve Orphans
@@ -772,7 +730,8 @@ const CentralUBIDRegistry = ({
               <tr className="bg-bg/50 border-b border-border">
                 <th className="p-4 text-[10px] font-bold text-text-muted uppercase italic serif">UBID / Anchor</th>
                 <th className="p-4 text-[10px] font-bold text-text-muted uppercase italic serif">Canonical Identity</th>
-                <th className="p-4 text-[10px] font-bold text-text-muted uppercase italic serif">System Coverage</th>
+                <th className="p-4 text-[10px] font-bold text-text-muted uppercase italic serif">Linked Records</th>
+                <th className="p-4 text-[10px] font-bold text-text-muted uppercase italic serif text-center">Coverage</th>
                 <th className="p-4 text-[10px] font-bold text-text-muted uppercase italic serif">Signal Confidence</th>
                 <th className="p-4 text-[10px] font-bold text-text-muted uppercase italic serif text-right">Actions</th>
               </tr>
@@ -795,18 +754,36 @@ const CentralUBIDRegistry = ({
                             {ubid.anchorType === 'Central' ? <ShieldCheck className="w-3.5 h-3.5 text-green-600" /> : <LinkIcon className="w-3.5 h-3.5 text-orange-600" />}
                           </div>
                           <div>
-                            <p className="text-xs font-bold text-text-main font-mono tracking-tighter">{ubid.ubid}</p>
+                            <p className={cn(
+                              "text-xs font-bold font-mono tracking-tighter",
+                              ubid.ubid.includes('KA-INT') ? "text-orange-700" : "text-text-main"
+                            )}>
+                              {ubid.ubid}
+                            </p>
                             <p className="text-[9px] text-text-muted uppercase font-medium">{ubid.anchorType} Anchor {ubid.anchorId ? `(${ubid.anchorId})` : ''}</p>
                           </div>
                         </div>
                       </td>
                       <td className="p-4">
-                        <p className="text-sm font-bold text-text-main group-hover:text-accent transition-colors">{ubid.canonicalName}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-bold text-text-main group-hover:text-accent transition-colors">{ubid.canonicalName}</p>
+                          <span className="text-[8px] font-bold bg-blue-100 text-blue-700 px-1 py-0.5 rounded border border-blue-200">MOCK</span>
+                        </div>
                         <p className="text-[10px] text-text-muted truncate max-w-[200px]">{ubid.canonicalAddress}</p>
                       </td>
                       <td className="p-4">
-                        <div className="flex -space-x-1.5">
-                          {Array.from(new Set(ubid.linkedRecords.map(r => r.department))).map((dept, i) => (
+                        <div className="flex items-center gap-2">
+                          <div className="px-2 py-0.5 rounded bg-bg border border-border text-[10px] font-bold text-text-main">
+                            {ubid.linkedRecords.length} Signal{ubid.linkedRecords.length !== 1 ? 's' : ''}
+                          </div>
+                          {ubid.linked_units && ubid.linked_units.length > 1 && (
+                            <span className="text-[9px] text-accent font-bold uppercase tracking-tighter">({ubid.linked_units.length} Units)</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        <div className="flex -space-x-1.5 justify-center">
+                          {Array.from(new Set(ubid.linkedRecords.map(r => r.department))).slice(0, 3).map((dept, i) => (
                             <div 
                               key={i} 
                               title={dept}
@@ -815,9 +792,9 @@ const CentralUBIDRegistry = ({
                               {dept.charAt(0)}
                             </div>
                           ))}
-                          {ubid.linkedRecords.length > 3 && (
+                          {Array.from(new Set(ubid.linkedRecords.map(r => r.department))).length > 3 && (
                             <div className="w-6 h-6 rounded-full border-2 border-white bg-bg flex items-center justify-center text-[8px] font-bold text-text-muted">
-                              +{ubid.linkedRecords.length - 3}
+                              +{Array.from(new Set(ubid.linkedRecords.map(r => r.department))).length - 3}
                             </div>
                           )}
                         </div>
@@ -883,22 +860,26 @@ const ReviewerQueue = ({
   suggestions, 
   setSuggestions, 
   onApprove, 
-  onReject 
+  onReject,
+  knowledge
 }: { 
   suggestions: MatchSuggestion[],
   setSuggestions: React.Dispatch<React.SetStateAction<MatchSuggestion[]>>,
   onApprove: (suggestion: MatchSuggestion) => void,
-  onReject: (suggestion: MatchSuggestion) => void
+  onReject: (suggestion: MatchSuggestion) => void,
+  knowledge: SystemKnowledge
 }) => {
   const [filter, setFilter] = useState<'All' | 'High' | 'Medium' | 'Low' | 'History'>('All');
   const [actioningId, setActioningId] = useState<string | null>(null);
   const [showCommitSuccess, setShowCommitSuccess] = useState(false);
 
-  // Auto-commitment logic for high-confidence matches (> 0.95)
+  // Auto-commitment logic for high-confidence matches (Threshold dynamic via Risk Tolerance)
   useEffect(() => {
+    const autoCommitThreshold = 1.0 - (knowledge.riskTolerance * 0.1);
+
     const autoCommit = () => {
       const highConfidencePending = suggestions.filter(
-        s => s.status === 'Pending' && s.confidence >= 0.95
+        s => s.status === 'Pending' && s.confidence >= autoCommitThreshold
       );
 
       if (highConfidencePending.length > 0) {
@@ -906,13 +887,13 @@ const ReviewerQueue = ({
         highConfidencePending.forEach(s => onApprove(s));
 
         setSuggestions(prev => prev.map(s => {
-          if (s.confidence >= 0.95 && s.status === 'Pending') {
+          if (s.confidence >= autoCommitThreshold && s.status === 'Pending') {
             return { 
               ...s, 
               status: 'Auto-Committed' as const,
               reviewerFeedback: {
                 action: 'Approved',
-                reason: 'Auto-committed via High Confidence Threshold (>= 0.95)',
+                reason: `Auto-committed via High Confidence Threshold (>= ${Math.floor(autoCommitThreshold * 100)}%)`,
                 timestamp: new Date().toISOString(),
                 reviewer: 'System (Logic Engine)'
               }
@@ -927,7 +908,7 @@ const ReviewerQueue = ({
 
     const timer = setTimeout(autoCommit, 2000);
     return () => clearTimeout(timer);
-  }, [onApprove, suggestions]);
+  }, [onApprove, suggestions, knowledge.riskTolerance]);
 
   const handleAction = (id: string, action: 'Approved' | 'Rejected' | 'Pending') => {
     setActioningId(id);
@@ -966,8 +947,8 @@ const ReviewerQueue = ({
       if (s.status !== 'Pending') return false;
 
       if (filter === 'All') return true;
-      if (filter === 'High') return s.confidence >= 0.9;
-      if (filter === 'Medium') return s.confidence >= 0.7 && s.confidence < 0.9;
+      if (filter === 'High') return s.confidence >= 0.95;
+      if (filter === 'Medium') return s.confidence >= 0.7 && s.confidence < 0.95;
       if (filter === 'Low') return s.confidence < 0.7;
       return true;
     });
@@ -1036,16 +1017,22 @@ const ReviewerQueue = ({
         </div>
         <div className="flex items-center gap-2">
           <div className="flex bg-card border border-border rounded p-0.5">
-            {['All', 'High', 'Medium', 'Low', 'History'].map((f) => (
+            {[
+              { id: 'All', label: 'All' },
+              { id: 'High', label: 'Master Sync (>=95%)' },
+              { id: 'Medium', label: 'Human Review (70-94%)' },
+              { id: 'Low', label: 'Orphans (<70%)' },
+              { id: 'History', label: 'History' }
+            ].map((f) => (
               <button
-                key={f}
-                onClick={() => setFilter(f as any)}
+                key={f.id}
+                onClick={() => setFilter(f.id as any)}
                 className={cn(
-                  "px-3 py-1 text-[10px] font-bold uppercase rounded transition-all",
-                  filter === f ? "bg-accent text-white" : "text-text-muted hover:text-text-main"
+                  "px-3 py-1 text-[10px] font-bold uppercase rounded transition-all whitespace-nowrap",
+                  filter === f.id ? "bg-accent text-white" : "text-text-muted hover:text-text-main"
                 )}
               >
-                {f}
+                {f.label}
               </button>
             ))}
           </div>
@@ -1084,6 +1071,21 @@ const ReviewerQueue = ({
                     s.confidence >= 0.75 ? "bg-blue-50 text-confidence-high" : "bg-orange-50 text-confidence-mid"
                   )}>
                     <div className="flex flex-col min-w-[80px]">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className={cn(
+                          "px-1.5 py-0.5 rounded-[3px] text-[8px] font-black uppercase tracking-tighter shadow-sm",
+                          s.verdict === 'AUTO_MERGE' ? "bg-green-600 text-white" :
+                          s.verdict === 'HUMAN_REVIEW' ? "bg-blue-600 text-white" :
+                          "bg-slate-600 text-white"
+                        )}>
+                          {s.verdict?.replace('_', ' ') || 'ORPHAN'}
+                        </span>
+                        {s.edgeCaseFlag && s.edgeCaseFlag !== 'NONE' && (
+                          <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[8px] font-black rounded border border-red-200 uppercase tracking-tighter shadow-sm">
+                            {s.edgeCaseFlag.replace('_', ' ')}
+                          </span>
+                        )}
+                      </div>
                       <div className="flex items-center gap-1.5">
                         <CheckCircle2 className="w-3 h-3" />
                         Confidence: {(s.confidence * 100).toFixed(0)}%
@@ -1192,6 +1194,7 @@ const ReviewerQueue = ({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-[10px] font-bold text-accent uppercase tracking-wider">
                       <Database className="w-3.5 h-3.5" /> {s.recordA.department}
+                      <span className="text-[8px] font-bold bg-blue-100 text-blue-700 px-1 py-0.5 rounded border border-blue-200">MOCK</span>
                     </div>
                     <span className="text-[9px] font-bold text-text-muted bg-white px-1.5 py-0.5 rounded border border-border">SOURCE A</span>
                   </div>
@@ -1204,13 +1207,17 @@ const ReviewerQueue = ({
                   </div>
                   <div className="grid grid-cols-2 gap-3 pt-3 border-t border-border/50">
                     <div>
-                      <span className="text-[9px] text-text-muted uppercase font-bold block mb-0.5">Owner</span>
-                      <p className="text-[11px] font-medium text-text-main">{s.recordA.ownerName}</p>
+                      <span className="text-[9px] text-text-muted uppercase font-bold block mb-0.5">PAN / ENTITY ID</span>
+                      <p className="text-[11px] font-mono text-text-main font-bold">{s.recordA.pan || 'N/A'}</p>
                     </div>
                     <div>
-                      <span className="text-[9px] text-text-muted uppercase font-bold block mb-0.5">GSTIN</span>
-                      <p className="text-[11px] font-mono text-text-main">{s.recordA.gstin}</p>
+                      <span className="text-[9px] text-text-muted uppercase font-bold block mb-0.5">GSTIN / TAX ID</span>
+                      <p className="text-[11px] font-mono text-text-main">{s.recordA.gstin || 'N/A'}</p>
                     </div>
+                  </div>
+                  <div className="pt-2">
+                     <span className="text-[9px] text-text-muted uppercase font-bold block mb-0.5">Statutory Owner</span>
+                     <p className="text-[11px] font-medium text-text-main">{s.recordA.ownerName}</p>
                   </div>
                 </div>
 
@@ -1219,6 +1226,7 @@ const ReviewerQueue = ({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-[10px] font-bold text-accent uppercase tracking-wider">
                       <Database className="w-3.5 h-3.5" /> {s.recordB.department}
+                      <span className="text-[8px] font-bold bg-blue-100 text-blue-700 px-1 py-0.5 rounded border border-blue-200">MOCK</span>
                     </div>
                     <span className="text-[9px] font-bold text-text-muted bg-white px-1.5 py-0.5 rounded border border-border">SOURCE B</span>
                   </div>
@@ -1231,24 +1239,41 @@ const ReviewerQueue = ({
                   </div>
                   <div className="grid grid-cols-2 gap-3 pt-3 border-t border-border/50">
                     <div>
-                      <span className="text-[9px] text-text-muted uppercase font-bold block mb-0.5">Owner</span>
+                      <span className="text-[9px] text-text-muted uppercase font-bold block mb-0.5">PAN / ENTITY ID</span>
                       <p className={cn(
-                        "text-[11px] font-medium",
-                        s.recordA.ownerName !== s.recordB.ownerName ? "text-orange-600 bg-orange-50 px-1 rounded" : "text-text-main"
+                        "text-[11px] font-mono font-bold",
+                        s.recordA.pan && s.recordB.pan && s.recordA.pan === s.recordB.pan ? "text-status-active bg-green-50 px-1 rounded" : 
+                        s.recordA.pan && s.recordB.pan && s.recordA.pan !== s.recordB.pan ? "text-status-closed bg-red-50 px-1 rounded" : "text-text-main"
                       )}>
-                        {s.recordB.ownerName}
+                        {s.recordB.pan || 'N/A'}
                       </p>
                     </div>
                     <div>
-                      <span className="text-[9px] text-text-muted uppercase font-bold block mb-0.5">GSTIN</span>
-                      <p className={cn(
-                        "text-[11px] font-mono", 
-                        !s.recordB.gstin || s.recordB.gstin === 'Pending' ? "text-orange-500 italic" : 
-                        s.recordA.gstin !== s.recordB.gstin ? "text-orange-600 bg-orange-50 px-1 rounded" : "text-text-main"
-                      )}>
-                        {s.recordB.gstin || 'Pending'}
-                      </p>
+                      <span className="text-[9px] text-text-muted uppercase font-bold block mb-0.5">GSTIN / TAX ID</span>
+                      <div className="flex items-center gap-1.5">
+                         <p className={cn(
+                          "text-[11px] font-mono", 
+                          !s.recordB.gstin || s.recordB.gstin === 'Pending' ? "text-orange-500 italic" : 
+                          s.recordA.gstin !== s.recordB.gstin ? "text-orange-600 bg-orange-50 px-1 rounded" : "text-text-main"
+                        )}>
+                          {s.recordB.gstin || 'Pending'}
+                        </p>
+                        {s.recordA.gstin && s.recordB.gstin && s.recordA.gstin === s.recordB.gstin && (
+                          <div className="bg-green-100 p-0.5 rounded">
+                            <CheckCircle2 className="w-2.5 h-2.5 text-green-600" />
+                          </div>
+                        )}
+                      </div>
                     </div>
+                  </div>
+                  <div className="pt-2">
+                    <span className="text-[9px] text-text-muted uppercase font-bold block mb-0.5">Statutory Owner</span>
+                    <p className={cn(
+                      "text-[11px] font-medium",
+                      s.recordA.ownerName !== s.recordB.ownerName ? "text-orange-600 bg-orange-50 px-1 rounded" : "text-text-main"
+                    )}>
+                      {s.recordB.ownerName}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -1438,7 +1463,7 @@ const AuditTrail = ({ log }: { log: AuditEntry[] }) => {
 };
 
 const StatusSignals = ({ ubid, events }: { ubid: UBIDRecord, events: ActivityEvent[] }) => {
-  const verdict = useMemo(() => inferBusinessStatus(ubid.ubid, events), [ubid.ubid, events]);
+  const verdict = useMemo(() => inferBusinessStatus(ubid.ubid, events, 180, ubid.canonicalName), [ubid.ubid, events, ubid.canonicalName]);
   
   return (
     <div className="bg-bg/50 p-4 rounded-lg border border-border relative overflow-hidden">
@@ -1454,27 +1479,18 @@ const StatusSignals = ({ ubid, events }: { ubid: UBIDRecord, events: ActivityEve
         </div>
         <div className="flex items-center gap-3">
           <div className={cn(
-            "px-2 py-0.5 rounded text-[10px] font-bold uppercase opacity-50 line-through",
-            verdict.status === 'Active' ? "bg-green-100 text-status-active" :
-            verdict.status === 'Dormant' ? "bg-orange-100 text-status-dormant" :
+            "px-2 py-0.5 rounded text-[10px] font-bold uppercase",
+            ubid.status.toUpperCase() === 'ACTIVE' ? "bg-green-100 text-status-active" :
+            ubid.status.toUpperCase() === 'DORMANT' ? "bg-orange-100 text-status-dormant" :
             "bg-red-100 text-status-closed"
           )}>
-            {verdict.status} (Inferred)
-          </div>
-          <ArrowRight className="w-3 h-3 text-text-muted" />
-          <div className={cn(
-            "px-2 py-0.5 rounded text-[10px] font-bold uppercase ring-2 ring-accent ring-inset",
-            ubid.status === 'Active' ? "bg-green-100 text-status-active" :
-            ubid.status === 'Dormant' ? "bg-orange-100 text-status-dormant" :
-            "bg-red-100 text-status-closed"
-          )}>
-            {ubid.status} {ubid.manualStatusOverride ? '(Manual)' : ''}
+            {ubid.status} {ubid.manualStatusOverride ? '(Authority Overridden)' : ''}
           </div>
         </div>
       </div>
       
-      <p className="text-xs text-text-main font-medium leading-relaxed mb-1">
-        {ubid.manualStatusOverride ? `Reviewer Logic: ${ubid.manualStatusOverride.reason}` : verdict.reasoning}
+      <p className="text-xs text-text-main font-medium leading-relaxed mb-1 italic">
+        "Operational verdict: {ubid.manualStatusOverride ? `${ubid.manualStatusOverride.reason}` : verdict.reasoning}"
       </p>
       {ubid.manualStatusOverride && (
         <p className="text-[10px] text-text-muted mb-4 italic">
@@ -1515,7 +1531,7 @@ const UBIDDetailContent = ({
 }: { 
   ubid: UBIDRecord, 
   events: ActivityEvent[],
-  onUpdateStatus?: (status: 'Active' | 'Dormant' | 'Closed', reason: string) => void,
+  onUpdateStatus?: (status: 'ACTIVE' | 'DORMANT' | 'CLOSED', reason: string) => void,
   onUnlinkRecord?: (recordId: string) => void
 }) => {
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
@@ -1523,10 +1539,23 @@ const UBIDDetailContent = ({
   const [overrideReason, setOverrideReason] = useState('');
   
   const relevantEvents = useMemo(() => {
-    return events
-      .filter(e => e.ubid === ubid.ubid)
+    const realEvents = events
+      .filter(e => e.ubid === ubid.ubid || (ubid.canonicalName && e.businessNameHint === ubid.canonicalName));
+    
+    // SYTHESIZED SIGNALS: Every linked record represents an inherent registration signal
+    const registrationSignals = ubid.linkedRecords.map(r => ({
+      id: `REG-${r.id}`,
+      ubid: ubid.ubid,
+      department: r.department,
+      eventType: 'Sovereign Registration',
+      date: format(new Date(), 'yyyy-MM-dd'),
+      details: `Identity anchor established via ${r.department}. Legal status: ${r.status}.`,
+      value: 'Medium'
+    }));
+
+    return [...realEvents, ...registrationSignals]
       .sort((a, b) => parseISO(b.date).getTime() - parseISO(a.date).getTime());
-  }, [events, ubid.ubid]);
+  }, [events, ubid.ubid, ubid.canonicalName, ubid.linkedRecords]);
 
   const sortedHistory = useMemo(() => {
     return (ubid.statusHistory || [])
@@ -1580,13 +1609,19 @@ const UBIDDetailContent = ({
               {ubid.anchorType === 'Central' ? <ShieldCheck className="w-3.5 h-3.5 text-green-600" /> : <LinkIcon className="w-3.5 h-3.5 text-orange-600" />}
             </div>
             <span className="text-[10px] font-bold text-text-main uppercase">{ubid.anchorType} Anchor {ubid.anchorId ? `(${ubid.anchorId})` : ''}</span>
+            <span className="text-[8px] font-bold bg-blue-100 text-blue-700 px-1 py-0.5 rounded border border-blue-200 ml-1">MOCK DATA</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className={cn("w-2 h-2 rounded-full", ubid.status === 'Active' ? "bg-status-active" : "bg-status-dormant")} />
+            <div className={cn("w-2 h-2 rounded-full", ubid.status.toUpperCase() === 'ACTIVE' ? "bg-status-active" : "bg-status-dormant")} />
             <span className="text-xs font-medium text-text-main">
               Status: {ubid.status} 
               {ubid.manualStatusOverride && (
-                <span className="ml-1.5 px-1.5 py-0.5 bg-orange-50 text-orange-600 text-[9px] font-bold rounded border border-orange-100 uppercase">Override</span>
+                <span 
+                  className="ml-1.5 px-1.5 py-0.5 bg-orange-50 text-orange-600 text-[9px] font-bold rounded border border-orange-100 uppercase cursor-help"
+                  title={ubid.manualStatusOverride.reason}
+                >
+                  Override
+                </span>
               )}
             </span>
           </div>
@@ -1594,15 +1629,66 @@ const UBIDDetailContent = ({
             <FileText className="w-3.5 h-3.5 text-text-muted" />
             <span className="text-xs text-text-muted">PAN: {ubid.pan || 'N/A'}</span>
           </div>
+          {ubid.gstin && (
+            <div className="flex items-center gap-1.5">
+              <Shield className="w-3.5 h-3.5 text-text-muted" />
+              <span className="text-xs text-text-muted">GSTIN: {ubid.gstin}</span>
+            </div>
+          )}
+          {ubid.tradeLicense && (
+            <div className="flex items-center gap-1.5">
+              <Building2 className="w-3.5 h-3.5 text-text-muted" />
+              <span className="text-xs text-text-muted">Trade License: {ubid.tradeLicense}</span>
+            </div>
+          )}
+          {ubid.edgeCaseFlag && ubid.edgeCaseFlag !== 'NONE' && (
+            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-red-50 border border-red-100 rounded">
+              <AlertTriangle className="w-3.5 h-3.5 text-red-600" />
+              <span className="text-[10px] font-bold text-red-700 uppercase tracking-tight">{ubid.edgeCaseFlag.replace('_', ' ')}</span>
+            </div>
+          )}
           <div className="flex items-center gap-1.5">
             <CheckCircle2 className="w-3.5 h-3.5 text-status-active" />
             <span className="text-xs text-text-muted">Confidence: {(ubid.confidence * 100).toFixed(0)}%</span>
           </div>
+          <div className="flex items-center gap-1.5">
+            <Microscope className="w-3.5 h-3.5 text-accent" />
+            <span className="text-xs text-text-muted">Resolution Risk: {ubid.riskScore}%</span>
+          </div>
+        </div>
+
+        {/* Linkage Reasoning Block */}
+        {ubid.linkageReasoning && (
+          <div className="w-full flex items-start gap-4 p-4 bg-accent/5 border border-accent/10 rounded-lg">
+             <div className="p-2 bg-white rounded-full shadow-sm border border-accent/10 shrink-0">
+               <Fingerprint className="w-4 h-4 text-accent" />
+             </div>
+             <div className="space-y-1">
+               <p className="text-[10px] font-black uppercase text-accent/70 tracking-widest">Identity Resolution Context</p>
+               <p className="text-xs font-medium leading-relaxed text-text-main">
+                 {ubid.linkageReasoning}
+               </p>
+             </div>
+          </div>
+        )}
+
+        {/* Status Reasoning Block */}
+        <div className="w-full flex items-start gap-4 p-4 bg-slate-50 border border-slate-200 rounded-lg">
+           <div className="p-2 bg-white rounded-full shadow-sm border border-slate-100 shrink-0">
+             <Info className="w-4 h-4 text-accent" />
+           </div>
+           <div className="space-y-1">
+             <p className="text-[10px] font-black uppercase text-text-muted tracking-widest">Operational Verdict Reasoning</p>
+             <p className="text-xs font-medium leading-relaxed text-text-main italic border-l-2 border-accent/20 pl-3">
+               "{ubid.reasoning}"
+             </p>
+           </div>
         </div>
         
         <button 
           onClick={() => setIsUpdatingStatus(!isUpdatingStatus)}
           className="px-3 py-1.5 bg-bg border border-border rounded text-[10px] font-bold text-text-muted hover:text-accent hover:border-accent transition-all uppercase flex items-center gap-1.5"
+          id="btn-status-override"
         >
           <Settings className="w-3 h-3" /> Override Status
         </button>
@@ -1631,9 +1717,9 @@ const UBIDDetailContent = ({
                     onChange={(e) => setNewStatus(e.target.value as any)}
                     className="w-full text-xs p-2 bg-white border border-border rounded focus:ring-1 focus:ring-accent outline-none"
                   >
-                    <option value="Active">Active</option>
-                    <option value="Dormant">Dormant</option>
-                    <option value="Closed">Closed</option>
+                    <option value="ACTIVE">ACTIVE</option>
+                    <option value="DORMANT">DORMANT</option>
+                    <option value="CLOSED">CLOSED</option>
                   </select>
                 </div>
                 <div className="md:col-span-2 space-y-1.5">
@@ -1675,8 +1761,128 @@ const UBIDDetailContent = ({
               exit={{ height: 0, opacity: 0 }}
               className="overflow-hidden"
             >
-              <div className="pt-2">
+              <div className="pt-2 space-y-4">
                 <StatusSignals ubid={ubid} events={events} />
+                
+                {/* Business Activities Breakdown */}
+                <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                  <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
+                    <Zap className="w-3.5 h-3.5 text-accent" /> Registered Business Activities
+                  </h4>
+                  <div className="flex flex-wrap gap-2">
+                    {ubid.activities && ubid.activities.length > 0 ? (
+                      ubid.activities.map((activity, idx) => (
+                        <span 
+                          key={idx} 
+                          className="px-2 py-1 bg-white border border-slate-200 rounded text-[10px] font-bold text-slate-700 shadow-sm"
+                        >
+                          {activity}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-[10px] text-slate-400 italic">No activity signals found in source records.</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Risk Diagnostic Breakdown */}
+                <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                  <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
+                    <ShieldAlert className="w-3.5 h-3.5 text-accent" /> Identity Integrity Risk Factors
+                  </h4>
+                  <div className="space-y-2">
+                    {ubid.riskFactors && ubid.riskFactors.length > 0 ? (
+                      ubid.riskFactors.map((factor, idx) => (
+                        <div key={idx} className="flex items-center gap-2">
+                          <div className="w-1 h-1 bg-accent rounded-full" />
+                          <p className="text-[10px] text-text-main font-medium">{factor}</p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-[10px] text-slate-400 italic">No significant integrity risks identified. Node is within nominal operating parameters.</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Edge Case Diagnostic & Parent-Child Hub */}
+                <div className="p-4 bg-slate-50/80 rounded-lg border border-slate-200">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider flex items-center gap-2">
+                       <Microscope className="w-3.5 h-3.5 text-accent" /> Identity Topology & Linked Units
+                    </h4>
+                    {ubid.edgeCaseFlag && ubid.edgeCaseFlag !== 'NONE' && (
+                       <span className="px-1.5 py-0.5 bg-red-600 text-white text-[9px] font-black rounded uppercase">{ubid.edgeCaseFlag.replace('_', ' ')}</span>
+                    )}
+                  </div>
+                  
+                  <div className="space-y-4">
+                    <p className="text-[11px] text-text-main font-medium leading-relaxed bg-white/50 p-2 rounded border border-border/50">
+                      {ubid.edgeCaseFlag === 'PARENT_CHILD' && (
+                        <>
+                          <strong>Master Cluster (PAN Sovereign):</strong> This Master UBID serves as the Sovereign Node for <strong>{ubid.linked_units?.length || 0}</strong> registered units. 
+                          The legal identity is anchored to PAN: <strong>{ubid.pan}</strong> (Master). Attached units represent distinct departmental filings for this legal person.
+                        </>
+                      )}
+                      {ubid.edgeCaseFlag === 'BRANCH_NODE' && (
+                        <>
+                          <strong>Branch Topology (Geospatial Hub):</strong> This entity operates across multiple locations under the same credentials. 
+                          The primary node is matched with <strong>{ubid.linked_units?.find(lu => lu.role?.includes('Primary'))?.unit_id || 'Principal Unit'}</strong>.
+                        </>
+                      )}
+                      {ubid.edgeCaseFlag === 'MULTI_VERTICAL' && (
+                        <>
+                          <strong>Cross-Departmental Synergy:</strong> High-confidence integration of {ubid.linkedRecords.length} records across diverse verticals.
+                        </>
+                      )}
+                      {ubid.edgeCaseFlag === 'IDENTITY_COLLISION' && (
+                        <>
+                          <strong>Identity Collision Guard:</strong> Conflicts detected in departmental data (e.g. differing PANs for same Name/Address). Manual isolation active.
+                        </>
+                      )}
+                      {(!ubid.edgeCaseFlag || ubid.edgeCaseFlag === 'NONE') && 'Standard deterministic identity with unified departmental linkage.'}
+                    </p>
+
+                    {/* Linked Units Status Grid */}
+                    {ubid.linked_units && ubid.linked_units.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {ubid.linked_units.map((unit, idx) => (
+                          <div key={idx} className="flex items-center justify-between p-2.5 bg-white rounded border border-border shadow-sm group hover:border-accent/50 transition-all">
+                            <div className="flex items-center gap-3 overflow-hidden">
+                               <div className={cn(
+                                 "w-10 h-10 rounded bg-bg flex items-center justify-center border border-border shrink-0 group-hover:bg-accent/5 transition-colors",
+                                 unit.unit_status === 'ACTIVE' ? "text-status-active" : "text-text-muted"
+                               )}>
+                                 {unit.type === 'Commercial Taxes' && <Calculator className="w-5 h-5" />}
+                                 {unit.type === 'Labour Department' && <HardHat className="w-5 h-5" />}
+                                 {unit.type === 'Factories & Boilers' && <Building2 className="w-5 h-5" />}
+                                 {unit.type === 'BESCOM' && <Zap className="w-5 h-5" />}
+                                 {!['Commercial Taxes', 'Labour Department', 'Factories & Boilers', 'BESCOM'].includes(unit.type) && <Database className="w-5 h-5" />}
+                               </div>
+                               <div className="flex flex-col min-w-0">
+                                  <span className="text-[11px] font-bold text-text-main truncate">{unit.unit_id}</span>
+                                  <span className="text-[10px] text-text-muted">{unit.type}</span>
+                                  {unit.role && (
+                                    <span className="text-[8px] text-accent font-black uppercase mt-0.5 tracking-tight">{unit.role}</span>
+                                  )}
+                               </div>
+                            </div>
+                            <div className="flex flex-col items-end gap-1 shrink-0">
+                              <div className={cn(
+                                "px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-tighter shadow-sm",
+                                unit.unit_status === 'ACTIVE' ? "bg-green-100 text-status-active border border-green-200" :
+                                unit.unit_status === 'DORMANT' ? "bg-orange-100 text-status-dormant border border-orange-200" :
+                                "bg-red-100 text-status-closed border border-red-200"
+                              )}>
+                                {unit.unit_status}
+                              </div>
+                              <span className="text-[8px] text-text-muted font-mono">{unit.latest_signal}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </motion.div>
           )}
@@ -1713,8 +1919,8 @@ const UBIDDetailContent = ({
                           <ArrowRight className="w-2.5 h-2.5 text-text-muted" />
                           <span className={cn(
                             "text-[10px] font-bold uppercase",
-                            h.to === 'Active' ? "text-status-active" : 
-                            h.to === 'Dormant' ? "text-status-dormant" : "text-status-closed"
+                            h.to === 'ACTIVE' ? "text-status-active" : 
+                            h.to === 'DORMANT' ? "text-status-dormant" : "text-status-closed"
                           )}>
                             {h.to}
                           </span>
@@ -1729,11 +1935,14 @@ const UBIDDetailContent = ({
                           {h.type}
                         </span>
                       </div>
-                      <p className="text-xs text-text-main font-bold leading-tight">{h.reason}</p>
                       <div className="flex items-center gap-1.5 mt-1.5">
                         <Fingerprint className="w-3 h-3 text-text-muted/50" />
                         <p className="text-[9px] text-text-muted uppercase font-bold tracking-tight">Actor: {h.actor}</p>
                       </div>
+                      <p className="text-xs text-text-main mt-1.5 leading-relaxed">
+                        <span className="text-[9px] font-bold text-text-muted uppercase tracking-tighter mr-2 opacity-60">Verdict Reason:</span>
+                        {h.reason}
+                      </p>
                     </div>
                   ))
                 ) : (
@@ -1779,6 +1988,7 @@ const UBIDDetailContent = ({
                       <div className="flex items-center gap-1.5 mb-1.5">
                         <Building2 className="w-3.5 h-3.5 text-accent" />
                         <span className="text-[10px] font-bold text-accent uppercase">{r.department}</span>
+                        <span className="text-[8px] font-bold bg-blue-100 text-blue-700 px-1 rounded border border-blue-200">MOCK</span>
                       </div>
                       <p className="text-sm font-bold text-text-main">{r.businessName}</p>
                       <div className="flex items-center gap-2 mt-1">
@@ -1838,6 +2048,7 @@ const UBIDDetailContent = ({
                       <div className="pb-4">
                         <div className="flex items-center gap-2 mb-0.5">
                           <span className="text-xs font-bold text-text-main">{e.eventType}</span>
+                          <span className="text-[8px] font-bold bg-blue-100 text-blue-700 px-1 rounded border border-blue-200">MOCK</span>
                           <span className="text-[10px] text-text-muted">{e.date}</span>
                           <span className={cn(
                             "px-1 py-0.5 rounded text-[9px] font-bold uppercase",
@@ -1878,7 +2089,7 @@ const UBIDExplorer = ({
   events: ActivityEvent[],
   selectedUbid: UBIDRecord | null, 
   setSelectedUbid: (u: UBIDRecord | null) => void,
-  onUpdateStatus?: (ubidId: string, status: 'Active' | 'Dormant' | 'Closed', reason: string) => void,
+  onUpdateStatus?: (ubidId: string, status: 'ACTIVE' | 'DORMANT' | 'CLOSED', reason: string) => void,
   onUnlinkRecord?: (ubidId: string, recordId: string) => void
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -1905,13 +2116,12 @@ const UBIDExplorer = ({
 
     const upperValue = value.toUpperCase();
     
-    // Support multiple anchor formats
-    const isUBID = upperValue.startsWith('KA-UBID-');
-    const isGSTIN = upperValue.startsWith('KA-GSTIN-');
-    const isPAN = upperValue.startsWith('KA-PAN-');
+    // Support official UBID format: KA-XXXXXXXX-C or KA-INT-XXXXXXXX-C
+    const ubidPattern = /^KA-(INT-)?([0-9A-Z]{8})-[0-9A-Z]$/;
+    const isValidFormat = ubidPattern.test(upperValue);
 
-    if (!isUBID && !isGSTIN && !isPAN) {
-      setValidationError("Must start with 'KA-UBID-', 'KA-GSTIN-', or 'KA-PAN-'");
+    if (!isValidFormat && upperValue.length > 3) {
+      setValidationError("Must follow official KA-XXXXXXXX-C or KA-INT-XXXXXXXX-C format");
       return;
     }
 
@@ -1988,11 +2198,20 @@ const UBIDExplorer = ({
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3 mb-1">
-                      <span className="text-[10px] font-mono font-bold text-accent px-1.5 py-0.5 bg-blue-50 rounded">{u.ubid}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className={cn(
+                          "text-[10px] font-mono font-bold px-1.5 py-0.5 rounded",
+                          u.ubid.includes('KA-INT') ? "bg-orange-50 text-orange-700 border border-orange-100" : "bg-blue-50 text-accent border border-blue-100"
+                        )}>
+                          {u.ubid}
+                        </span>
+                      </div>
                       <div className="flex items-center gap-1.5">
                         <span className={cn(
                           "px-1.5 py-0.5 rounded text-[9px] font-bold uppercase",
-                          u.status === 'Active' ? "bg-green-100 text-status-active" : "bg-orange-100 text-status-dormant"
+                          u.status === 'ACTIVE' ? "bg-green-100 text-status-active" : 
+                          u.status === 'DORMANT' ? "bg-orange-100 text-status-dormant" : 
+                          "bg-red-100 text-status-closed"
                         )}>
                           {u.status}
                         </span>
@@ -2084,7 +2303,8 @@ const OrphanResolution = ({
       businessName: activeOrphan.businessNameHint || '',
       address: activeOrphan.addressHint || '',
       pinCode: activeOrphan.pinCodeHint || '',
-      ownerName: '' 
+      ownerName: '',
+      status: 'ACTIVE'
     };
 
     return ubids.map(ubid => {
@@ -2388,7 +2608,7 @@ const QueryResultRow = React.memo(({
   onToggle: () => void, 
   lastSignal: string,
   onViewDetails?: (ubid: UBIDRecord) => void,
-  onUpdateStatus?: (ubidId: string, status: 'Active' | 'Dormant' | 'Closed', reason: string) => void,
+  onUpdateStatus?: (ubidId: string, status: 'ACTIVE' | 'DORMANT' | 'CLOSED', reason: string) => void,
   onUnlinkRecord?: (ubidId: string, recordId: string) => void,
   events: ActivityEvent[]
 }) => (
@@ -2400,7 +2620,10 @@ const QueryResultRow = React.memo(({
       )}
       onClick={onToggle}
     >
-      <td className="px-2 py-3 font-mono font-bold text-accent">
+      <td className={cn(
+        "px-2 py-3 font-mono font-bold",
+        ubid.ubid.includes('KA-INT') ? "text-orange-700" : "text-accent"
+      )}>
         <div className="flex items-center gap-2">
           <ChevronRight className={cn("w-3 h-3 transition-transform", isExpanded ? "rotate-90" : "")} />
           {ubid.ubid}
@@ -2411,7 +2634,8 @@ const QueryResultRow = React.memo(({
         <div className="flex flex-col gap-0.5">
           {ubid.pan && <span className="text-[9px] text-text-muted">PAN: {ubid.pan}</span>}
           {ubid.gstin && <span className="text-[9px] text-text-muted">GST: {ubid.gstin}</span>}
-          {!ubid.pan && !ubid.gstin && <span className="text-[9px] text-text-muted italic">None</span>}
+          {ubid.tradeLicense && <span className="text-[9px] text-text-muted">TLS: {ubid.tradeLicense}</span>}
+          {!ubid.pan && !ubid.gstin && !ubid.tradeLicense && <span className="text-[9px] text-text-muted italic">None</span>}
         </div>
       </td>
       <td className="px-2 py-3 max-w-[200px]">
@@ -2423,8 +2647,8 @@ const QueryResultRow = React.memo(({
       <td className="px-2 py-3 text-center">
         <span className={cn(
           "px-1.5 py-0.5 rounded text-[9px] font-bold uppercase",
-          ubid.status === 'Active' ? "bg-green-100 text-status-active" :
-          ubid.status === 'Dormant' ? "bg-orange-100 text-status-dormant" :
+          ubid.status === 'ACTIVE' ? "bg-green-100 text-status-active" :
+          ubid.status === 'DORMANT' ? "bg-orange-100 text-status-dormant" :
           "bg-red-100 text-status-closed"
         )}>
           {ubid.status}
@@ -2497,7 +2721,7 @@ const QueryTool = React.memo(({
   ubids: UBIDRecord[], 
   events: ActivityEvent[],
   onViewDetails?: (ubid: UBIDRecord) => void,
-  onUpdateStatus?: (ubidId: string, status: 'Active' | 'Dormant' | 'Closed', reason: string) => void,
+  onUpdateStatus?: (ubidId: string, status: 'ACTIVE' | 'DORMANT' | 'CLOSED', reason: string) => void,
   onUnlinkRecord?: (ubidId: string, recordId: string) => void
 }) => {
   const [statusFilter, setStatusFilter] = useState<string>('All');
@@ -2630,9 +2854,9 @@ const QueryTool = React.memo(({
               className="w-full p-1.5 text-xs bg-card border border-border rounded outline-none focus:ring-1 focus:ring-accent"
             >
               <option value="All">All Statuses</option>
-              <option value="Active">Active</option>
-              <option value="Dormant">Dormant</option>
-              <option value="Closed">Closed</option>
+              <option value="ACTIVE">ACTIVE</option>
+              <option value="DORMANT">DORMANT</option>
+              <option value="CLOSED">CLOSED</option>
             </select>
           </div>
           <div className="space-y-1.5">
@@ -2666,7 +2890,7 @@ const QueryTool = React.memo(({
           <span className="text-[10px] font-bold text-text-muted uppercase self-center mr-2">Quick Logic:</span>
           <button 
             onClick={() => {
-              setStatusFilter('Active');
+              setStatusFilter('ACTIVE');
               setDeptFilter('Factories');
               setPinFilter('560058');
               setMonths(18);
@@ -2690,7 +2914,7 @@ const QueryTool = React.memo(({
           </button>
           <button 
             onClick={() => {
-              setStatusFilter('Dormant');
+              setStatusFilter('DORMANT');
               setDeptFilter('Labour');
               setSelectedActivities(['Compliance Filing']);
               setMonths(6);
@@ -2843,6 +3067,732 @@ QueryTool.displayName = 'QueryTool';
 
 // --- Main App ---
 
+const ManualReversionWorkspace = ({ 
+  ubids, 
+  knowledge, 
+  onUnlinkRecord,
+  onLinkRecords,
+  onRemoveBlacklist,
+  onTransferRecord,
+  addNotification
+}: { 
+  ubids: UBIDRecord[], 
+  knowledge: SystemKnowledge,
+  onUnlinkRecord: (ubidId: string, recordId: string) => void,
+  onLinkRecords: (recordA: SourceRecord, recordB: SourceRecord) => void,
+  onRemoveBlacklist: (idA: string, idB: string) => void,
+  onTransferRecord: (recordId: string, targetUbidId: string) => void,
+  addNotification: (title: string, message: string, type: AppNotification['type'], entityId?: string) => void
+}) => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedUbidId, setSelectedUbidId] = useState<string | null>(null);
+  const [linkingMode, setLinkingMode] = useState(false);
+  const [linkSearchTerm, setLinkSearchTerm] = useState('');
+  const [transferringRecord, setTransferringRecord] = useState<SourceRecord | null>(null);
+
+  const selectedUbid = useMemo(() => ubids.find(u => u.ubid === selectedUbidId), [ubids, selectedUbidId]);
+
+  const performSearch = (term: string, source: UBIDRecord[]) => {
+    if (!term) return [];
+    const lowTerm = term.toLowerCase();
+    return source.filter(u => 
+      u.ubid.toLowerCase().includes(lowTerm) || 
+      u.canonicalName.toLowerCase().includes(lowTerm) ||
+      u.pan?.toLowerCase().includes(lowTerm) ||
+      u.gstin?.toLowerCase().includes(lowTerm) ||
+      u.linkedRecords.some(r => 
+        r.id.toLowerCase().includes(lowTerm) ||
+        r.businessName.toLowerCase().includes(lowTerm) ||
+        r.pan?.toLowerCase().includes(lowTerm) ||
+        r.gstin?.toLowerCase().includes(lowTerm) ||
+        r.address?.toLowerCase().includes(lowTerm)
+      )
+    ).slice(0, 10);
+  };
+
+  const filteredUbids = useMemo(() => performSearch(searchTerm, ubids), [searchTerm, ubids]);
+  const linkTargets = useMemo(() => performSearch(linkSearchTerm, ubids.filter(u => u.ubid !== selectedUbid?.ubid)), [linkSearchTerm, ubids, selectedUbid]);
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-card p-6 rounded-lg border border-border shadow-sm">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-orange-100 rounded-lg">
+              <ShieldAlert className="w-5 h-5 text-orange-600" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-text-main uppercase tracking-tight">Manual Reversion & Authority Workspace</h2>
+              <p className="text-xs text-text-muted italic">Ground Truth Link/Unlink Control</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button 
+              onClick={() => { setSelectedUbidId(null); setLinkingMode(false); setSearchTerm(''); }}
+              className="px-3 py-1.5 bg-bg border border-border rounded text-[10px] font-bold uppercase hover:bg-slate-100"
+            >
+              Reset View
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+            <input 
+              type="text" 
+              placeholder="Search by UBID, Internal ID, Name, PAN or GSTIN..."
+              className="w-full pl-10 pr-4 py-3 text-sm bg-bg border border-border rounded-lg focus:ring-2 focus:ring-orange-500/20 outline-none transition-all"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+
+          {filteredUbids.length > 0 && !selectedUbid && (
+            <div className="border border-border rounded-lg overflow-hidden bg-white shadow-xl absolute z-30 w-full max-w-2xl">
+              {filteredUbids.map(u => (
+                <button 
+                  key={u.ubid}
+                  onClick={() => {
+                    setSelectedUbidId(u.ubid);
+                    setSearchTerm('');
+                  }}
+                  className="w-full p-4 text-left hover:bg-bg transition-colors flex justify-between items-center border-b border-border last:border-0 group"
+                >
+                  <div className="flex-1 min-w-0 pr-4">
+                    <p className="text-xs font-bold text-text-main truncate">{u.canonicalName}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className={cn(
+                        "text-[10px] font-mono font-bold",
+                        u.ubid.includes('KA-INT') ? "text-orange-700" : "text-accent"
+                      )}>{u.ubid}</span>
+                      {u.pan && <span className="text-[9px] text-text-muted uppercase tracking-tight">PAN: {u.pan}</span>}
+                    </div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-text-muted group-hover:text-accent transition-all" />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <AnimatePresence mode="wait">
+        {selectedUbid && (
+          <motion.div 
+            key="selected-ubid"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            className="space-y-6"
+          >
+            <div className="bg-card p-6 rounded-lg border-2 border-orange-200 shadow-lg relative overflow-hidden">
+              <div className="absolute top-0 right-0 p-4 flex gap-2">
+                <button 
+                  onClick={() => setLinkingMode(!linkingMode)}
+                  className={cn(
+                    "px-4 py-2 rounded text-[10px] font-bold uppercase transition-all flex items-center gap-2",
+                    linkingMode ? "bg-slate-800 text-white" : "bg-orange-100 text-orange-700 hover:bg-orange-200"
+                  )}
+                >
+                  {linkingMode ? <RefreshCcw className="w-3.5 h-3.5 animate-spin-slow" /> : <LinkIcon className="w-3.5 h-3.5" />}
+                  {linkingMode ? "Cancel Manual Link" : "Manually Link Record"}
+                </button>
+              </div>
+              
+              <div className="mb-6">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] font-bold text-orange-600 bg-orange-50 px-2 py-0.5 rounded border border-orange-100 uppercase tracking-wider">Authority Selection</span>
+                </div>
+                <h3 className="text-xl font-bold text-text-main">{selectedUbid.canonicalName}</h3>
+                <div className="flex items-center gap-3 mt-1">
+                  <p className={cn(
+                    "text-xs font-mono font-bold",
+                    selectedUbid.ubid.includes('KA-INT') ? "text-orange-700" : "text-accent"
+                  )}>{selectedUbid.ubid}</p>
+                  <span className="w-1 h-1 bg-border rounded-full" />
+                  <p className="text-xs text-text-muted">{selectedUbid.canonicalAddress}</p>
+                </div>
+                <div className="flex flex-wrap gap-4 mt-3">
+                  <div className="flex items-center gap-1.5 bg-bg px-2 py-1 rounded border border-border">
+                    <span className="text-[9px] font-bold text-text-muted uppercase">PAN</span>
+                    <span className="text-xs font-bold text-text-main">{selectedUbid.pan || 'N/A'}</span>
+                  </div>
+                  {selectedUbid.gstin && (
+                    <div className="flex items-center gap-1.5 bg-bg px-2 py-1 rounded border border-border">
+                      <span className="text-[9px] font-bold text-text-muted uppercase">GSTIN</span>
+                      <span className="text-xs font-bold text-text-main">{selectedUbid.gstin}</span>
+                    </div>
+                  )}
+                  {selectedUbid.tradeLicense && (
+                    <div className="flex items-center gap-1.5 bg-bg px-2 py-1 rounded border border-border">
+                      <span className="text-[9px] font-bold text-text-muted uppercase">Trade License</span>
+                      <span className="text-xs font-bold text-text-main">{selectedUbid.tradeLicense}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {linkingMode && (
+                <motion.div 
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  className="mb-8 p-6 bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl space-y-6"
+                >
+                  <div className="flex items-center gap-3 text-slate-800">
+                    <Sparkles className="w-5 h-5 text-accent" />
+                    <h4 className="text-sm font-bold uppercase tracking-tight">Step: Identify Link Target</h4>
+                  </div>
+                  
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+                    <input 
+                      type="text" 
+                      placeholder="Search target UBID to merge with this cluster..."
+                      className="w-full pl-10 pr-4 py-3 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-accent outline-none"
+                      value={linkSearchTerm}
+                      onChange={(e) => setLinkSearchTerm(e.target.value)}
+                    />
+                    
+                    {linkTargets.length > 0 && (
+                      <div className="absolute top-full left-0 w-full mt-2 bg-white border border-border rounded-lg shadow-2xl z-40 max-h-[300px] overflow-y-auto divide-y divide-border">
+                        {linkTargets.map(target => (
+                          <div key={target.ubid} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
+                            <div className="flex-1 min-w-0 pr-4">
+                              <p className="text-xs font-bold text-text-main">{target.canonicalName}</p>
+                              <p className={cn(
+                                "text-[10px] font-mono font-bold",
+                                target.ubid.includes('KA-INT') ? "text-orange-700" : "text-accent"
+                              )}>{target.ubid}</p>
+                            </div>
+                            <button 
+                              onClick={() => {
+                                if (window.confirm(`MANUAL SYNC: Merge ${target.canonicalName} into ${selectedUbid.canonicalName}?`)) {
+                                  onLinkRecords(selectedUbid.linkedRecords[0], target.linkedRecords[0]);
+                                  setLinkingMode(false);
+                                  setLinkSearchTerm('');
+                                  // Stay on the primary cluster instead of resetting
+                                  addNotification('Cluster Merge Initiated', 'Integrating data verticals...', 'info');
+                                }
+                              }}
+                              className="px-4 py-2 bg-accent text-white rounded text-[10px] font-bold uppercase hover:bg-accent-hover transition-all"
+                            >
+                              Finalize Linkage
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+
+              <div className="space-y-4">
+                <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-widest border-b border-border pb-1">Cluster Management</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {selectedUbid.linkedRecords.map(record => (
+                    <div key={record.id} className="p-4 bg-white border border-border rounded-lg group transition-all hover:border-orange-300 shadow-sm">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="flex items-center gap-1.5 mb-1.5">
+                            <div className="p-1 bg-bg rounded group-hover:bg-orange-50 transition-colors">
+                              <Building2 className="w-3.5 h-3.5 text-text-muted group-hover:text-orange-600" />
+                            </div>
+                            <span className="text-[10px] font-bold text-text-main uppercase">{record.department}</span>
+                          </div>
+                          <p className="text-sm font-bold text-text-main leading-tight">{record.businessName}</p>
+                          <div className="mt-2 space-y-1">
+                            <p className="text-[10px] font-mono text-accent font-bold">ID: {record.id}</p>
+                            <p className="text-[10px] text-text-muted truncate max-w-[200px]">{record.address}</p>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => {
+                            if (window.confirm(`FORCE REVERSION: Unlink ${record.businessName}?`)) {
+                              onUnlinkRecord(selectedUbid.ubid, record.id);
+                            }
+                          }}
+                          className="p-2 text-text-muted hover:text-red-600 hover:bg-red-50 rounded transition-all flex flex-col items-center gap-1"
+                          title="Perform Unlink Reversion"
+                        >
+                          <Link2Off className="w-4 h-4" />
+                          <span className="text-[8px] font-bold uppercase">Unlink</span>
+                        </button>
+                        <button 
+                          onClick={() => setTransferringRecord(record)}
+                          className="p-2 text-text-muted hover:text-accent hover:bg-accent/5 rounded transition-all flex flex-col items-center gap-1"
+                          title="Transfer record to another UBID"
+                        >
+                          <RefreshCcw className="w-4 h-4" />
+                          <span className="text-[8px] font-bold uppercase">Transfer</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {transferringRecord && (
+              <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="bg-white rounded-xl shadow-2xl border border-border w-full max-w-lg p-8 space-y-6"
+                >
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h4 className="text-lg font-bold text-text-main flex items-center gap-2">
+                        <RefreshCcw className="w-5 h-5 text-accent" />
+                        Transfer Identity Record
+                      </h4>
+                      <p className="text-xs text-text-muted mt-1 uppercase tracking-wider font-bold">Targeting Record: {transferringRecord.id}</p>
+                    </div>
+                    <button onClick={() => setTransferringRecord(null)} className="p-1 hover:bg-bg rounded">
+                      <Lock className="w-5 h-5 text-text-muted" />
+                    </button>
+                  </div>
+
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                    <p className="text-sm font-bold text-slate-800">{transferringRecord.businessName}</p>
+                    <p className="text-[10px] text-slate-500 truncate">{transferringRecord.address}</p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Search Destination UBID</label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+                      <input 
+                        type="text" 
+                        placeholder="Type UBID, Name, or PAN..."
+                        className="w-full pl-10 pr-4 py-3 bg-white border border-border rounded-lg focus:ring-2 focus:ring-accent outline-none"
+                        value={linkSearchTerm}
+                        onChange={(e) => setLinkSearchTerm(e.target.value)}
+                        autoFocus
+                      />
+                    </div>
+
+                    <div className="max-h-[300px] overflow-y-auto divide-y divide-border border border-border rounded-lg bg-white">
+                      {linkTargets.map(target => (
+                        <div key={target.ubid} className="p-4 flex items-center justify-between hover:bg-bg transition-all">
+                          <div className="flex-1 min-w-0 pr-4">
+                            <p className="text-xs font-bold text-text-main truncate">{target.canonicalName}</p>
+                            <p className="text-[10px] font-mono text-accent font-bold uppercase">{target.ubid}</p>
+                          </div>
+                          <button 
+                            onClick={() => {
+                              onTransferRecord(transferringRecord.id, target.ubid);
+                              setTransferringRecord(null);
+                              setLinkSearchTerm('');
+                              setSelectedUbidId(null);
+                            }}
+                            className="px-4 py-2 bg-accent text-white rounded text-[10px] font-bold uppercase hover:bg-accent-hover"
+                          >
+                            Transfer to Target
+                          </button>
+                        </div>
+                      ))}
+                      {linkSearchTerm && linkTargets.length === 0 && (
+                        <div className="p-8 text-center text-text-muted text-xs italic">No matching destinations found</div>
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Manual Blacklist Section */}
+      <div className="bg-card p-6 rounded-lg border border-border shadow-sm">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="p-2 bg-slate-100 rounded-lg">
+            <Lock className="w-5 h-5 text-slate-600" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-text-main uppercase tracking-tight">Manual Blacklist Registry</h2>
+            <p className="text-xs text-text-muted italic">Persistent ID-to-ID Blocking Ledger</p>
+          </div>
+        </div>
+
+        {knowledge.manualBlacklist.length > 0 ? (
+          <div className="overflow-hidden border border-border rounded-lg divide-y divide-border">
+            {knowledge.manualBlacklist.map((entry, idx) => (
+              <div key={idx} className="p-4 bg-slate-50 flex items-center justify-between group">
+                <div className="flex items-center gap-6">
+                  <div className="flex flex-col">
+                    <span className="text-[9px] font-bold text-text-muted uppercase">Record A</span>
+                    <span className="text-[11px] font-mono font-bold text-text-main">{entry.recordIdA}</span>
+                  </div>
+                  <div className="flex flex-col items-center">
+                    <span className="text-orange-600 font-bold text-sm text-[16px]">↛</span>
+                    <span className="text-[8px] font-bold text-orange-600 uppercase">Blocked</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[9px] font-bold text-text-muted uppercase">Record B</span>
+                    <span className="text-[11px] font-mono font-bold text-text-main">{entry.recordIdB}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="px-2 py-1 bg-white border border-border rounded flex items-center gap-1.5 shadow-sm">
+                    <ShieldAlert className="w-3 h-3 text-orange-500" />
+                    <span className="text-[9px] font-bold text-text-muted uppercase">MANUAL_REVERSION_ENFORCED</span>
+                  </div>
+                  <button 
+                    onClick={() => onRemoveBlacklist(entry.recordIdA, entry.recordIdB)}
+                    className="p-1.5 text-text-muted hover:text-red-600 hover:bg-red-50 rounded transition-all"
+                    title="Clear Persistent Conflict"
+                  >
+                    <RefreshCcw className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-10 bg-bg/50 rounded-lg border border-dashed border-border flex flex-col items-center justify-center">
+            <Lock className="w-8 h-8 text-text-muted opacity-20 mb-3" />
+            <p className="text-xs font-bold text-text-muted uppercase tracking-widest">No persistent conflicts registered</p>
+            <p className="text-[10px] text-text-muted mt-1 uppercase tracking-tight italic">Registry is operating with standard deterministic synchronization</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const SystemLogicLedger = ({ 
+  knowledge, 
+  setKnowledge,
+  setUbids,
+  addNotification,
+  logAudit,
+  sourceRecords
+}: { 
+  knowledge: SystemKnowledge, 
+  setKnowledge: React.Dispatch<React.SetStateAction<SystemKnowledge>>,
+  setUbids: React.Dispatch<React.SetStateAction<UBIDRecord[]>>,
+  addNotification: (title: string, message: string, type: AppNotification['type'], targetUbid?: string) => void,
+  logAudit: (action: string, entityId: string, details: string, type: AuditEntry['type']) => void,
+  sourceRecords: SourceRecord[]
+}) => {
+  const threshold = 1.0 - (knowledge.riskTolerance * 0.1);
+
+  return (
+    <div className="space-y-6">
+      {/* Risk Configuration Section */}
+      <div className="bg-card rounded-lg border border-accent/20 p-6 shadow-md shadow-accent/5 relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-1 bg-accent text-[8px] text-white font-bold uppercase">Admin Override</div>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div className="max-w-md">
+            <div className="flex items-center gap-2 mb-2">
+              <ShieldAlert className="w-5 h-5 text-accent" />
+              <h2 className="text-base font-bold text-text-main uppercase tracking-tight">System Risk Tolerance</h2>
+            </div>
+            <p className="text-xs text-text-muted leading-relaxed">
+              Adjust the threshold for automated linkage. Higher tolerance permits more autonomous merges but increases the chance of false positives. Lower tolerance requires higher statistical certainty.
+            </p>
+          </div>
+          
+          <div className="flex-1 w-full max-w-sm space-y-4">
+            <div className="flex justify-between items-end">
+              <div>
+                <span className="text-[10px] font-bold text-text-muted uppercase">Confidence Req.</span>
+                <p className="text-2xl font-black text-accent">{(threshold * 100).toFixed(1)}%</p>
+              </div>
+              <div className="flex flex-col items-end gap-1.5">
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => setKnowledge(prev => ({ ...prev, riskTolerance: 0.4 }))}
+                    className="text-[9px] font-bold text-accent hover:bg-accent/10 px-1.5 py-0.5 rounded border border-accent/20 flex items-center gap-1 transition-all"
+                  >
+                    <RotateCcw className="w-2.5 h-2.5" />
+                    Set Default
+                  </button>
+                  <button 
+                    onClick={() => {
+                      const resolved = resolveUBIDs(sourceRecords, knowledge);
+                      setUbids(prev => {
+                        // Merge static mock metadata back into resolved results if they overlap
+                        const newlyResolved = resolved;
+                        return [
+                          ...MOCK_UBIDS.filter(m => !newlyResolved.some(n => n.ubid === m.ubid)),
+                          ...newlyResolved
+                        ];
+                      });
+                      addNotification('Full System Sync', 'Deterministic Logic Engine re-run on all records with current knowledge.', 'success');
+                      logAudit('System Sync', 'Registry-Wide', 'Re-resolution performed on all source records.', 'Governance');
+                    }}
+                    className="text-[9px] font-bold text-white bg-accent hover:bg-accent-hover px-1.5 py-0.5 rounded flex items-center gap-1 transition-all shadow-sm"
+                  >
+                    <RefreshCcw className="w-2.5 h-2.5" />
+                    Sync Entry
+                  </button>
+                  <span className="text-[10px] font-bold text-text-muted uppercase">Current Stance</span>
+                </div>
+                <p className={cn(
+                  "text-[10px] font-bold px-2 py-0.5 rounded uppercase",
+                  knowledge.riskTolerance < 0.3 ? "bg-red-100 text-red-700" :
+                  knowledge.riskTolerance < 0.7 ? "bg-blue-100 text-accent" : "bg-orange-100 text-orange-700"
+                )}>
+                  {knowledge.riskTolerance < 0.3 ? 'Conservative' : 
+                   knowledge.riskTolerance < 0.7 ? 'Balanced (Recomm.)' : 'Lenient'}
+                </p>
+              </div>
+            </div>
+            
+            <div className="space-y-2">
+              <input 
+                type="range" 
+                min="0" 
+                max="1" 
+                step="0.05"
+                value={knowledge.riskTolerance}
+                onChange={(e) => setKnowledge(prev => ({ ...prev, riskTolerance: parseFloat(e.target.value) }))}
+                className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-accent"
+              />
+              <div className="flex justify-between text-[8px] font-bold text-text-muted uppercase tracking-widest px-1">
+                <span>STRICT (100%)</span>
+                <span>LENIENT (90%)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-card rounded-lg border border-border p-6 shadow-sm">
+          <div className="flex items-center gap-3 mb-4">
+            <Settings className="w-5 h-5 text-accent" />
+            <h2 className="text-base font-bold text-text-main uppercase tracking-tight">Identity Linking Logic</h2>
+          </div>
+          <div className="space-y-4">
+            <div className="p-4 bg-bg/50 rounded-lg border border-border">
+              <h3 className="text-xs font-bold text-accent uppercase mb-2">Rule 1: Anchor Sync</h3>
+              <p className="text-xs text-text-muted leading-relaxed">
+                If records share a legal identifier (GSTIN or PAN), they are joined with 100% confidence.
+              </p>
+              <div className="mt-3 font-mono text-[9px] bg-slate-100 p-2 rounded text-slate-600">
+                if (recordA.gstin == recordB.gstin) Join(A, B)
+              </div>
+            </div>
+            
+            <div className="p-4 bg-bg/50 rounded-lg border border-border">
+              <h3 className="text-xs font-bold text-accent uppercase mb-2">Rule 2: Fuzzy Grouping</h3>
+              <p className="text-xs text-text-muted leading-relaxed">
+                If no legal ID exists, we compare Business Name and Address similarity within the same PIN code.
+              </p>
+              <div className="mt-3 font-mono text-[9px] bg-slate-100 p-2 rounded text-slate-600">
+                if (similarity(A.name, B.name) &gt; 80%) SuggestMatch(A, B)
+              </div>
+            </div>
+            <div className="p-4 bg-bg/50 rounded-lg border border-border">
+              <h3 className="text-xs font-bold text-accent uppercase mb-2">Rule 3: Manual Reversion</h3>
+              <p className="text-xs text-text-muted leading-relaxed">
+                Human verdicts (LINK/UNLINK) override all fuzzy logic. Unlinked records are never merged again.
+              </p>
+              <div className="mt-3 font-mono text-[9px] bg-slate-100 p-2 rounded text-slate-600">
+                if (isBlacklisted(A, B)) RejectMatch(A, B)
+              </div>
+            </div>
+
+            <div className="p-4 bg-orange-50/50 rounded-lg border border-orange-100">
+              <h3 className="text-xs font-bold text-orange-700 uppercase mb-2">Rule 4: ID Promotion</h3>
+              <p className="text-xs text-text-muted leading-relaxed">
+                Provisional IDs (KA-INT) are retired and upgraded to Permanent UBIDs (KA-) while preserving entropy as soon as a PAN/GSTIN is verified.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-card rounded-lg border border-border p-6 shadow-sm">
+          <div className="flex items-center gap-3 mb-4">
+            <Zap className="w-5 h-5 text-accent" />
+            <h2 className="text-base font-bold text-text-main uppercase tracking-tight">Status Inference Logic</h2>
+          </div>
+          <p className="text-xs text-text-muted mb-4 leading-relaxed">
+            The system looks at the "Operational Velocity" of a business to determine if it is Active or Dormant.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { label: 'Signal in &lt; 90 days', status: 'ACTIVE', color: 'text-status-active border-green-200 bg-green-50' },
+              { label: 'Signal between 3-12m', status: 'DORMANT', color: 'text-status-dormant border-orange-200 bg-orange-50' },
+              { label: 'No signal &gt; 12m', status: 'CLOSED', color: 'text-status-closed border-red-200 bg-red-50' }
+            ].map(rule => (
+              <div key={rule.status} className={cn("p-3 rounded border text-center flex flex-col justify-center gap-1", rule.color)}>
+                <span className="text-[10px] font-bold uppercase">{rule.status}</span>
+                <span className="text-[9px] opacity-80">{rule.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-blue-50/50 p-6 rounded-lg border border-blue-100">
+        <h2 className="text-xs font-bold text-accent uppercase mb-4 tracking-wider">Karnataka UBID Deterministic Logic Engine (v3.0)</h2>
+        <div className="bg-slate-900 rounded-lg p-5 font-mono text-[10px] text-slate-300 leading-relaxed overflow-x-auto">
+          <pre className="whitespace-pre">
+{`# THE ANCHOR SYSTEM:
+# PAN = Legal Anchor (Ownership)
+# GSTIN = State Tax Anchor (Business Vertical)
+# Trade License / Pincode = Geospatial Anchor (Physical Location)
+
+def calculate_verdict(record):
+    # HARD RULE: Identity Collision Check
+    if record.pan != existing.pan: return ("ORPHAN", "IDENTITY_COLLISION", score < 70)
+
+    # 1. CONFIDENCE 95 - 100 (AUTO_MERGE - Same Exact Unit)
+    if record.pan and record.gstin and record.pincode == existing.pincode:
+        return ("AUTO_MERGE", "NONE", 99.0)
+    if record.pan and record.trade_license == existing.trade_license:
+        return ("AUTO_MERGE", "NONE", 98.0)
+    if record.pan and record.pincode and name_similarity > 0.85:
+        return ("AUTO_MERGE", "NONE", 96.0)
+
+    # 2. CONFIDENCE 70 - 94 (HUMAN_REVIEW - Edge Cases)
+    if record.pan and record.pincode != existing.pincode:
+        return ("HUMAN_REVIEW", "BRANCH_NODE", 85.0)  # Same owner, different branch
+    if record.pan and record.pincode and name_similarity < 0.60:
+        return ("HUMAN_REVIEW", "MULTI_BUSINESS", 82.0) # 2 shops, 1 building, 1 owner
+    if record.pan and record.pincode and record.gstin != existing.gstin:
+        return ("HUMAN_REVIEW", "MULTI_VERTICAL", 88.0) # Multiple tax verticals, one desk
+    if not record.pan and record.name == existing.name and record.pincode == existing.pincode:
+        return ("HUMAN_REVIEW", "MISSING_IDS", 75.0)
+
+    # 3. CONFIDENCE < 70 (ORPHAN - Independent Entity)
+    return ("ORPHAN", "NONE", 50.0)`}
+          </pre>
+        </div>
+        <p className="mt-4 text-[11px] text-text-muted italic">
+          Logic Verification: This engine is strictly deterministic. It prevents "Identity Poisoning" by treating the PAN as the immutable legal anchor.
+        </p>
+      </div>
+
+      <div className="bg-orange-50/30 p-6 rounded-lg border border-orange-100 mt-6">
+        <h2 className="text-sm font-bold text-orange-700 uppercase mb-4 tracking-wider flex items-center gap-2">
+          <ShieldAlert className="w-4 h-4" /> MANUAL OVERRIDE & REVERSIBILITY
+        </h2>
+        <div className="space-y-4">
+          <div className="flex gap-4">
+            <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center shrink-0 border border-orange-200">
+              <span className="text-[10px] font-bold text-orange-700">01</span>
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-orange-800 uppercase">HUMAN_AUTHORITY</h3>
+              <p className="text-[11px] text-orange-700/80 leading-relaxed max-w-2xl">
+                If the input data contains a "Human_Decision" flag (LINK or UNLINK), the model must bypass its internal scoring logic and adopt the human verdict as absolute "Ground Truth."
+              </p>
+            </div>
+          </div>
+          
+          <div className="flex gap-4">
+            <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center shrink-0 border border-orange-200">
+              <span className="text-[10px] font-bold text-orange-700">02</span>
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-orange-800 uppercase">REVERSIBILITY PROTOCOL</h3>
+              <p className="text-[11px] text-orange-700/80 leading-relaxed max-w-2xl">
+                When an "UNLINK" command is received for a previously merged UBID, the model must identify the specific Anchor (PAN, Address, etc.) that caused the false match, suggest the creation of a new, distinct "ORPHAN" UBID for the secondary record, and set the edge_case_flag to "MANUAL_REVERSION."
+              </p>
+            </div>
+          </div>
+
+          <div className="flex gap-4">
+            <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center shrink-0 border border-orange-200">
+              <span className="text-[10px] font-bold text-orange-700">03</span>
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-orange-800 uppercase">CONTINUOUS IMPROVEMENT</h3>
+              <p className="text-[11px] text-orange-700/80 leading-relaxed max-w-2xl">
+                Use the "Reasoning" field to document why the human override was necessary (e.g., "Manual inspection confirmed two distinct businesses operating at the same counter") to ensure these two records are never auto-merged again.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const NotificationCenter = React.memo(({ 
+  notifications, 
+  onClose, 
+  onMarkAsRead,
+  onClearAll 
+}: { 
+  notifications: AppNotification[], 
+  onClose: () => void,
+  onMarkAsRead: (id: string) => void,
+  onClearAll: () => void
+}) => {
+  return (
+    <motion.div 
+      initial={{ opacity: 0, scale: 0.95, y: -10 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.95, y: -10 }}
+      className="absolute top-full right-0 mt-3 w-80 bg-card border border-border rounded-xl shadow-2xl z-[100] flex flex-col overflow-hidden max-h-[500px]"
+    >
+      <div className="p-4 border-b border-border flex justify-between items-center bg-bg/50">
+        <h3 className="text-xs font-bold text-text-main uppercase tracking-widest flex items-center gap-2">
+          <Bell className="w-3.5 h-3.5 text-accent" /> Signals ({notifications.filter(n => !n.read).length})
+        </h3>
+        <button 
+          onClick={onClearAll}
+          className="text-[10px] font-bold text-accent hover:underline uppercase"
+        >
+          Clear All
+        </button>
+      </div>
+
+      <div className="overflow-y-auto divide-y divide-border">
+        {notifications.length > 0 ? (
+          notifications.map(n => (
+            <div 
+              key={n.id} 
+              className={cn(
+                "p-4 transition-colors hover:bg-bg/50 cursor-pointer relative",
+                !n.read ? "bg-accent/5" : ""
+              )}
+              onClick={() => onMarkAsRead(n.id)}
+            >
+              {!n.read && <div className="absolute top-4 right-4 w-2 h-2 rounded-full bg-accent animate-pulse" />}
+              <div className="flex flex-col gap-1 pr-4">
+                <span className="text-[10px] font-bold text-text-muted uppercase tracking-tighter">
+                  {formatDistanceToNow(parseISO(n.timestamp))} ago • {n.type}
+                </span>
+                <span className="text-sm font-bold text-text-main leading-tight">{n.title}</span>
+                <p className="text-xs text-text-muted line-clamp-2">{n.message}</p>
+                {n.entityId && (
+                  <span className="mt-1 text-[9px] font-mono text-accent bg-blue-50 px-1 rounded self-start border border-blue-100">
+                    Source: {n.entityId}
+                  </span>
+                )}
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="p-10 text-center flex flex-col items-center justify-center opacity-40">
+            <Bell className="w-8 h-8 mb-2" />
+            <p className="text-[10px] font-bold uppercase">No active signals</p>
+          </div>
+        )}
+      </div>
+
+      <div className="p-3 bg-bg/50 border-t border-border">
+        <button 
+          onClick={onClose}
+          className="w-full py-2 bg-accent text-white rounded font-bold text-[10px] uppercase hover:bg-accent-hover transition-all"
+        >
+          View Dashboard
+        </button>
+      </div>
+    </motion.div>
+  );
+});
+
+NotificationCenter.displayName = 'NotificationCenter';
+
 export default function App() {
   return (
     <SelfHealingBridge>
@@ -2852,26 +3802,59 @@ export default function App() {
 }
 
 function UBIDIntelligenceApp() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'review' | 'explorer' | 'query' | 'system-query' | 'registry' | 'resolution' | 'audit'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'review' | 'explorer' | 'query' | 'system-query' | 'registry' | 'resolution' | 'audit' | 'logic' | 'reversion'>('dashboard');
   const [globalSearch, setGlobalSearch] = useState('');
   const [showGlobalResults, setShowGlobalResults] = useState(false);
   const [selectedUbid, setSelectedUbid] = useState<UBIDRecord | null>(null);
   
+  const [sourceRecords] = useState(() => generateMockData().sourceRecords);
+  
   // Bootstrap the system using the linkage engine on raw records + mock anchors
   const [ubids, setUbids] = useState<UBIDRecord[]>(() => {
-    const { sourceRecords } = generateMockData();
-    const resolved = resolveUBIDs(sourceRecords);
+    const resolved = resolveUBIDs(sourceRecords, undefined, MOCK_EVENTS);
     // Merge with high-quality mock anchors for demonstration
-    return [...MOCK_UBIDS, ...resolved.filter(r => !MOCK_UBIDS.some(m => m.ubid === r.ubid))];
+    const merged = [...MOCK_UBIDS, ...resolved.filter(r => !MOCK_UBIDS.some(m => m.ubid === r.ubid))];
+    
+    // Ensure all UBIDs have their reasoning and status fully initialized from events if possible
+    return merged.map(u => {
+      const statusVerdict = inferBusinessStatus(u.ubid, MOCK_EVENTS, 180, u.canonicalName);
+      return {
+        ...u,
+        status: statusVerdict.status,
+        reasoning: statusVerdict.reasoning
+      };
+    });
   });
 
   const [events, setEvents] = useState<ActivityEvent[]>(MOCK_EVENTS);
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
   const [suggestions, setSuggestions] = useState<MatchSuggestion[]>(INITIAL_SUGGESTIONS);
+
+  const addNotification = useCallback((
+    title: string, 
+    message: string, 
+    type: AppNotification['type'], 
+    entityId?: string
+  ) => {
+    const newNotification: AppNotification = {
+      id: `NOTIF-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      timestamp: new Date().toISOString(),
+      title,
+      message,
+      type,
+      read: false,
+      entityId
+    };
+    setNotifications(prev => [newNotification, ...prev].slice(0, 50)); // Keep last 50
+  }, []);
   const [knowledge, setKnowledge] = useState<SystemKnowledge>({
     manualLinks: [],
     manualBlacklist: [],
-    learnedWeights: { nameWeight: 0.65, addressWeight: 0.25, pinWeight: 0.1 }
+    approvedAliases: [],
+    learnedWeights: { nameWeight: 0.65, addressWeight: 0.25, pinWeight: 0.1 },
+    riskTolerance: 0.4
   });
 
   const appOrphans = useMemo(() => findOrphanEvents(events, ubids), [events, ubids]);
@@ -2903,10 +3886,11 @@ function UBIDIntelligenceApp() {
     setAuditLog(prev => [entry, ...prev]);
   }, []);
 
-  const handleStatusOverride = useCallback((ubidId: string, status: 'Active' | 'Dormant' | 'Closed', reason: string) => {
+  const handleStatusOverride = useCallback((ubidId: string, status: 'ACTIVE' | 'DORMANT' | 'CLOSED', reason: string) => {
     setUbids(prev => prev.map(u => {
       if (u.ubid === ubidId) {
         logAudit('Status Override', ubidId, `Status changed from ${u.status} to ${status}. Reason: ${reason}`, 'Governance');
+        addNotification('Status Registry Updated', `Entity ${ubidId} lifecycle status changed to ${status}`, 'governance', ubidId);
         const historyEntry: StatusChange = {
           from: u.status,
           to: status,
@@ -2919,6 +3903,7 @@ function UBIDIntelligenceApp() {
         return {
           ...u,
           status,
+          reasoning: reason, // Core reasoning reflects current operational verdict
           manualStatusOverride: {
             status,
             reason,
@@ -2930,89 +3915,435 @@ function UBIDIntelligenceApp() {
       }
       return u;
     }));
-  }, []);
+  }, [logAudit, addNotification]);
 
   const handleUnlinkRecord = useCallback((ubidId: string, recordId: string) => {
-    setUbids(prev => prev.map(u => {
-      if (u.ubid === ubidId) {
-        return {
-          ...u,
-          linkedRecords: u.linkedRecords.filter(r => r.id !== recordId),
-          unlinkedRecordIds: [...(u.unlinkedRecordIds || []), recordId]
-        };
-      }
-      return u;
-    }));
-  }, []);
+    const parentUbid = ubids.find(u => u.ubid === ubidId);
+    if (!parentUbid) return;
 
-  const handleMatchApproved = useCallback((suggestion: MatchSuggestion) => {
-    // Persist as manual link knowledge
-    setKnowledge(prev => ({
-      ...prev,
-      manualLinks: [...prev.manualLinks, { recordId: suggestion.recordB.id, ubid: suggestion.recordA.id }]
-    }));
+    const recordToUnlink = parentUbid.linkedRecords.find(r => r.id === recordId);
+    if (!recordToUnlink) return;
 
-    // In a real system, this would trigger a merge logic
-    // Here we'll simulate linking recordB into the UBID of recordA (if recordA has one)
-    // or creating a new shared UBID
-    const targetUbid = ubids.find(u => u.linkedRecords.some(r => r.id === suggestion.recordA.id));
-    
-    if (targetUbid) {
-      logAudit('Manual Linkage', targetUbid.ubid, `Record ${suggestion.recordB.id} manually linked to ${targetUbid.ubid}`, 'Security');
-      setUbids(prev => prev.map(u => {
-        if (u.ubid === targetUbid.ubid) {
-          // Add recordB to this UBID
-          const alreadyLinked = u.linkedRecords.some(r => r.id === suggestion.recordB.id);
-          if (alreadyLinked) return u;
+    // ROLE: REVERSIBILITY PROTOCOL
+    // Clear any existing forced link for this record
+    setKnowledge(prev => {
+      // Blacklist this record from all other records in this cluster
+      const newBlacklistEntries = parentUbid.linkedRecords
+        .filter(r => r.id !== recordId)
+        .map(r => ({ recordIdA: recordId, recordIdB: r.id, flag: 'MANUAL_REVERSION' }));
+
+      return {
+        ...prev,
+        manualBlacklist: [...prev.manualBlacklist, ...newBlacklistEntries],
+        manualLinks: prev.manualLinks.filter(l => l.recordId !== recordId)
+      };
+    });
+
+    logAudit('Manual Reversion', ubidId, `Record ${recordId} unlinked from ${ubidId}. Flagged for MANUAL_REVERSION.`, 'Security');
+    addNotification('Manual Reversion Triggered', `Record ${recordId} unlinked from cluster ${ubidId}. Flagged for security.`, 'security', ubidId);
+
+    // Create a new Orphan UBID for the extracted record (Provisional by default)
+    const newUbidId = generateUnifiedBusinessIdentifier(`REVERSION-${recordId}-${Date.now()}`, true);
+    const unlinkedUbid: UBIDRecord = {
+      ubid: newUbidId,
+      anchorType: 'Internal',
+      canonicalName: recordToUnlink.businessName,
+      canonicalAddress: recordToUnlink.address,
+      pinCode: recordToUnlink.pinCode,
+      status: 'ACTIVE',
+      statusHistory: [
+        { from: 'UNKNOWN', to: 'ACTIVE', reason: 'Created via Manual Reversion (Unlink)', timestamp: new Date().toISOString(), actor: 'Senior Reviewer (White Hawk)', type: 'Manual' }
+      ],
+      confidence: 1.0,
+      riskScore: 5,
+      evidence: ['Manual Reversion Ground Truth'],
+      edgeCaseFlag: 'MANUAL_REVERSION',
+      lastUpdated: new Date().toISOString().split('T')[0],
+      linkedRecords: [recordToUnlink],
+      score: 1.0,
+      confidence_metadata: { anchor: 'Internal Registry', fuzzy: 'Manual Reversion Ground Truth' },
+      verdict: 'ORPHAN',
+      reasoning: 'Manual Reversion Ground Truth - Unit split from cluster.',
+      ui_metadata: { label: 'Synthetic Data', color: '#00008B' },
+      linked_units: [
+        {
+          unit_id: recordToUnlink.gstin || recordToUnlink.id,
+          type: recordToUnlink.department,
+          unit_status: recordToUnlink.status.toUpperCase(),
+          latest_signal: format(new Date(), 'yyyy-MM-dd')
+        }
+      ]
+    };
+
+    setUbids(prev => {
+      const filtered = prev.map(u => {
+        if (u.ubid === ubidId) {
           return {
             ...u,
-            linkedRecords: [...u.linkedRecords, suggestion.recordB],
-            confidence: Math.min(u.confidence + 0.05, 0.99),
-            evidence: [...u.evidence, `Manual Match Approved: ${suggestion.reasons.join(', ')}`]
+            linkedRecords: u.linkedRecords.filter(r => r.id !== recordId),
+            unlinkedRecordIds: [...(u.unlinkedRecordIds || []), recordId]
           };
         }
         return u;
-      }));
+      }).filter(u => u.linkedRecords.length > 0);
+      return [...filtered, unlinkedUbid];
+    });
+  }, [ubids, logAudit, addNotification]);
+
+  const handleTransferRecord = useCallback((recordId: string, targetUbidId: string) => {
+    // 1. Find the actual record object
+    let recordToTransfer: SourceRecord | null = null;
+    ubids.forEach(u => {
+      const found = u.linkedRecords.find(r => r.id === recordId);
+      if (found) recordToTransfer = found;
+    });
+
+    if (!recordToTransfer) return;
+
+    // 2. Clear previous manual state and link to new target
+    setKnowledge(prev => ({
+      ...prev,
+      manualLinks: [
+        ...prev.manualLinks.filter(l => l.recordId !== recordId),
+        { recordId, ubid: targetUbidId }
+      ],
+      manualBlacklist: prev.manualBlacklist.filter(b => b.recordIdA !== recordId && b.recordIdB !== recordId)
+    }));
+
+    // 3. Move the record in the registry
+    setUbids(prev => {
+      const cleaned = prev.map(u => ({
+        ...u,
+        linkedRecords: u.linkedRecords.filter(r => r.id !== recordId)
+      })).filter(u => u.linkedRecords.length > 0);
+
+      return cleaned.map(u => {
+        if (u.ubid === targetUbidId) {
+          return {
+            ...u,
+            linkedRecords: [...u.linkedRecords, recordToTransfer!]
+          };
+        }
+        return u;
+      });
+    });
+
+    logAudit('Identity Transfer', targetUbidId, `Record ${recordId} manually transferred to this cluster by authority.`, 'Governance');
+    addNotification('Record Transferred', `Record ${recordId} moved to target cluster ${targetUbidId}.`, 'success', targetUbidId);
+  }, [ubids, logAudit, addNotification]);
+
+  const handleMatchApproved = useCallback((suggestion: MatchSuggestion) => {
+    // 1. Find the current cluster locations
+    let ubidA = ubids.find(u => u.linkedRecords.some(r => r.id === suggestion.recordA.id));
+    let ubidB = ubids.find(u => u.linkedRecords.some(r => r.id === suggestion.recordB.id));
+    
+    // Determine the strategy and targets
+    let finalAction: 'MERGE' | 'LINK_TO_A' | 'LINK_TO_B' | 'CREATE_NEW' = 'CREATE_NEW';
+    let targetUbid: UBIDRecord | null = null;
+    let sourceRecords: SourceRecord[] = [];
+    let retiredUbid: string | null = null;
+
+    if (ubidA && ubidB) {
+      if (ubidA.ubid === ubidB.ubid) {
+        // Already matched, nothing to do
+        return;
+      }
+      finalAction = 'MERGE';
+    } else if (ubidA) {
+      finalAction = 'LINK_TO_A';
+    } else if (ubidB) {
+      finalAction = 'LINK_TO_B';
     } else {
-      // Create new UBID for both
-      // This is a simplified simulation
-      const newUbidId = `KA-MANUAL-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-      logAudit('Entity Resolution', newUbidId, `Created new manual UBID cluster for records ${suggestion.recordA.id} and ${suggestion.recordB.id}`, 'Governance');
-      const newUbid: UBIDRecord = {
-        ubid: newUbidId,
-        anchorType: 'Internal',
-        canonicalName: suggestion.recordA.businessName,
-        canonicalAddress: suggestion.recordA.address,
-        pinCode: suggestion.recordA.pinCode,
-        status: 'Active',
-        statusHistory: [
-          { from: 'Unknown', to: 'Active', reason: 'Manual Linkage Confirmation', timestamp: new Date().toISOString(), actor: 'Senior Reviewer (White Hawk)', type: 'Manual' }
-        ],
-        confidence: 0.95,
-        riskScore: 20,
-        evidence: [`Manual Linkage: ${suggestion.reasons.join(', ')}`],
-        lastUpdated: new Date().toISOString().split('T')[0],
-        linkedRecords: [suggestion.recordA, suggestion.recordB]
-      };
-      setUbids(prev => [...prev, newUbid]);
+      finalAction = 'CREATE_NEW';
     }
-  }, [ubids]);
+
+    // Prepare updates
+    setUbids(prev => {
+      let nextUbids = [...prev];
+
+      if (finalAction === 'MERGE') {
+        const uA = ubidA!;
+        const uB = ubidB!;
+        
+        // Decide which one survives (Always prefer Permanent over Provisional)
+        const aIsPermanent = !uA.ubid.includes('KA-INT');
+        const bIsPermanent = !uB.ubid.includes('KA-INT');
+        
+        let survivor = uA;
+        let retiree = uB;
+        if (!aIsPermanent && bIsPermanent) {
+          survivor = uB;
+          retiree = uA;
+        }
+
+        retiredUbid = retiree.ubid;
+        
+        nextUbids = nextUbids.filter(u => u.ubid !== retiree.ubid);
+        nextUbids = nextUbids.map(u => {
+          if (u.ubid === survivor.ubid) {
+            const updated = {
+              ...u,
+              linkedRecords: [...u.linkedRecords, ...retiree.linkedRecords],
+              historicalIds: [...(u.historicalIds || []), retiree.ubid, ...(retiree.historicalIds || [])],
+              confidence: 0.99,
+              evidence: [...u.evidence, `Manual Cluster Merge (Authority): ${retiree.ubid} retired into ${survivor.ubid}`]
+            };
+
+            // Merge linked_units correctly
+            if (retiree.linked_units) {
+              const existingIds = new Set(updated.linked_units.map(lu => lu.unit_id));
+              retiree.linked_units.forEach(lu => {
+                if (!existingIds.has(lu.unit_id)) {
+                  updated.linked_units.push(lu);
+                }
+              });
+            }
+
+            // RE-INFER STATUS: A merge might change the digital footprint
+            const statusVerdict = inferBusinessStatus(updated.ubid, events, 180, updated.canonicalName);
+            updated.status = statusVerdict.status;
+            updated.reasoning = statusVerdict.reasoning;
+
+            return updated;
+          }
+          return u;
+        });
+        targetUbid = survivor;
+      } else if (finalAction === 'LINK_TO_A') {
+        const survivor = ubidA!;
+        nextUbids = nextUbids.map(u => {
+          if (u.ubid === survivor.ubid) {
+            const updated = {
+              ...u,
+              linkedRecords: [...u.linkedRecords, suggestion.recordB],
+              confidence: Math.min(u.confidence + 0.1, 0.99),
+              evidence: [...u.evidence, `Manual Link Approved: ${suggestion.reasons.join(', ')}`]
+            };
+
+            // Add to linked_units
+            if (!updated.linked_units.some(lu => lu.unit_id === (suggestion.recordB.gstin || suggestion.recordB.id))) {
+              updated.linked_units.push({
+                unit_id: suggestion.recordB.gstin || suggestion.recordB.id,
+                type: suggestion.recordB.department,
+                unit_status: suggestion.recordB.status.toUpperCase(),
+                latest_signal: format(new Date(), 'yyyy-MM-dd'),
+                role: getUnitRole(suggestion.recordB, updated)
+              });
+            }
+
+            // Check for promotion
+            if (updated.ubid.includes('KA-INT') && (suggestion.recordB.pan || suggestion.recordB.gstin)) {
+              const old = updated.ubid;
+              updated.ubid = promoteUBID(old);
+              updated.historicalIds = [...(updated.historicalIds || []), old];
+              updated.anchorType = 'Central';
+              updated.pan = updated.pan || suggestion.recordB.pan;
+              updated.gstin = updated.gstin || suggestion.recordB.gstin;
+              updated.evidence.push(`ID PROMOTED: ${old} -> ${updated.ubid} (Authority Link)`);
+            }
+
+            // RE-INFER STATUS
+            const statusVerdict = inferBusinessStatus(updated.ubid, events, 180, updated.canonicalName);
+            updated.status = statusVerdict.status;
+            updated.reasoning = statusVerdict.reasoning;
+
+            return updated;
+          }
+          return u;
+        });
+        targetUbid = survivor;
+      } else if (finalAction === 'LINK_TO_B') {
+        const survivor = ubidB!;
+        nextUbids = nextUbids.map(u => {
+          if (u.ubid === survivor.ubid) {
+            const updated = {
+              ...u,
+              linkedRecords: [...u.linkedRecords, suggestion.recordA],
+              confidence: Math.min(u.confidence + 0.1, 0.99),
+              evidence: [...u.evidence, `Manual Link Approved: ${suggestion.reasons.join(', ')}`]
+            };
+
+            // Add to linked_units
+            if (!updated.linked_units.some(lu => lu.unit_id === (suggestion.recordA.gstin || suggestion.recordA.id))) {
+              updated.linked_units.push({
+                unit_id: suggestion.recordA.gstin || suggestion.recordA.id,
+                type: suggestion.recordA.department,
+                unit_status: suggestion.recordA.status.toUpperCase(),
+                latest_signal: format(new Date(), 'yyyy-MM-dd'),
+                role: getUnitRole(suggestion.recordA, updated)
+              });
+            }
+
+            if (updated.ubid.includes('KA-INT') && (suggestion.recordA.pan || suggestion.recordA.gstin)) {
+              const old = updated.ubid;
+              updated.ubid = promoteUBID(old);
+              updated.historicalIds = [...(updated.historicalIds || []), old];
+              updated.anchorType = 'Central';
+              updated.pan = updated.pan || suggestion.recordA.pan;
+              updated.gstin = updated.gstin || suggestion.recordA.gstin;
+              updated.evidence.push(`ID PROMOTED: ${old} -> ${updated.ubid} (Authority Link)`);
+            }
+
+            // RE-INFER STATUS
+            const statusVerdict = inferBusinessStatus(updated.ubid, events, 180, updated.canonicalName);
+            updated.status = statusVerdict.status;
+            updated.reasoning = statusVerdict.reasoning;
+
+            return updated;
+          }
+          return u;
+        });
+        targetUbid = survivor;
+      } else {
+        // CREATE_NEW
+        const newUbid = createBaseUBID(suggestion.recordA);
+        newUbid.linkedRecords.push(suggestion.recordB);
+        newUbid.confidence = 0.95;
+        newUbid.score = 0.95;
+        newUbid.evidence.push(`Manual Authority Linkage: ${suggestion.reasons.join(', ')}`);
+
+        // Add both to linked_units
+        newUbid.linked_units = [
+          {
+            unit_id: suggestion.recordA.gstin || suggestion.recordA.id,
+            type: suggestion.recordA.department,
+            unit_status: suggestion.recordA.status.toUpperCase(),
+            latest_signal: format(new Date(), 'yyyy-MM-dd'),
+            role: getUnitRole(suggestion.recordA, newUbid)
+          },
+          {
+            unit_id: suggestion.recordB.gstin || suggestion.recordB.id,
+            type: suggestion.recordB.department,
+            unit_status: suggestion.recordB.status.toUpperCase(),
+            latest_signal: format(new Date(), 'yyyy-MM-dd'),
+            role: getUnitRole(suggestion.recordB, newUbid)
+          }
+        ];
+        
+        // Final check for promotion if we added B
+        if (newUbid.ubid.includes('KA-INT') && (suggestion.recordB.pan || suggestion.recordB.gstin)) {
+           const old = newUbid.ubid;
+           newUbid.ubid = promoteUBID(old);
+           newUbid.historicalIds = [old];
+           newUbid.anchorType = 'Central';
+           newUbid.pan = newUbid.pan || suggestion.recordB.pan;
+           newUbid.gstin = newUbid.gstin || suggestion.recordB.gstin;
+        }
+
+        // RE-INFER STATUS
+        const statusVerdict = inferBusinessStatus(newUbid.ubid, events, 180, newUbid.canonicalName);
+        newUbid.status = statusVerdict.status;
+        newUbid.reasoning = statusVerdict.reasoning;
+
+        nextUbids.push(newUbid);
+        targetUbid = newUbid;
+      }
+
+      return nextUbids;
+    });
+
+    // Update Knowledge & Audit outside setUbids but inside effects
+    setKnowledge(prev => {
+      const recordsToLink = finalAction === 'MERGE' ? ubidB!.linkedRecords : 
+                           finalAction === 'LINK_TO_A' ? [suggestion.recordB] :
+                           finalAction === 'LINK_TO_B' ? [suggestion.recordA] :
+                           [suggestion.recordA, suggestion.recordB];
+
+      const newAliases = [...prev.approvedAliases];
+      [suggestion.recordA, suggestion.recordB].forEach(rec => {
+        const existingIdx = newAliases.findIndex(a => 
+          a.name === rec.businessName && a.address === rec.address
+        );
+        if (existingIdx > -1) {
+          newAliases[existingIdx] = { ...newAliases[existingIdx], frequency: newAliases[existingIdx].frequency + 1 };
+        } else {
+          newAliases.push({ name: rec.businessName, address: rec.address, ubid: (targetUbid || ubidA || ubidB)!.ubid, frequency: 1 });
+        }
+      });
+
+      const baseKnowledge = {
+        ...prev,
+        approvedAliases: newAliases,
+        manualBlacklist: prev.manualBlacklist.filter(entry => 
+          !((entry.recordIdA === suggestion.recordA.id && entry.recordIdB === suggestion.recordB.id) ||
+            (entry.recordIdA === suggestion.recordB.id && entry.recordIdB === suggestion.recordA.id))
+        ),
+        manualLinks: [
+          ...prev.manualLinks.filter(l => !recordsToLink.some(r => r.id === l.recordId)),
+          ...recordsToLink.map(r => ({ recordId: r.id, ubid: (targetUbid || ubidA || ubidB)!.ubid }))
+        ]
+      };
+      return adjustSystemWeights(baseKnowledge, 'Approved', suggestion.recordA, suggestion.recordB);
+    });
+
+    const finalId = targetUbid?.ubid || (ubidA?.ubid) || (ubidB?.ubid) || 'PENDING';
+    logAudit('Manual Linkage', finalId, `Senior Reviewer confirmed relationship. Final Action: ${finalAction}.`, 'Security');
+    addNotification('Identity Linkage Confirmed', `Authority confirmed relationship between records. Final Entity: ${finalId}`, 'success', finalId);
+  }, [ubids, logAudit, addNotification]);
+
 
   const handleMatchRejected = useCallback((suggestion: MatchSuggestion) => {
     logAudit('Linkage Block', suggestion.recordA.id, `Manually blacklisted record ${suggestion.recordB.id} from matching with this entity.`, 'Security');
+    addNotification('Match Rejection Logged', `Manual blacklist established between ${suggestion.recordA.id} and ${suggestion.recordB.id}.`, 'warning');
+    
+    setKnowledge(prev => {
+      const alreadyBlacklisted = prev.manualBlacklist.some(entry => 
+        (entry.recordIdA === suggestion.recordA.id && entry.recordIdB === suggestion.recordB.id) ||
+        (entry.recordIdA === suggestion.recordB.id && entry.recordIdB === suggestion.recordA.id)
+      );
+      
+      if (alreadyBlacklisted) return prev;
+
+      const baseKnowledge = {
+        ...prev,
+        manualBlacklist: [
+          ...prev.manualBlacklist, 
+          { recordIdA: suggestion.recordA.id, recordIdB: suggestion.recordB.id, flag: 'MANUAL_REVERSION' }
+        ]
+      };
+      return adjustSystemWeights(baseKnowledge, 'Rejected', suggestion.recordA, suggestion.recordB);
+    });
+
+    // INSTANTIATE INDEPENDENT ENTITIES:
+    // If these records are currently floating, instantiate them according to logic rules
+    setUbids(prev => {
+      let next = [...prev];
+      
+      [suggestion.recordA, suggestion.recordB].forEach(record => {
+        const alreadyExists = next.some(u => u.linkedRecords.some(r => r.id === record.id));
+        if (!alreadyExists) {
+          const newUbid = createBaseUBID(record);
+          
+          // Apply standard KUBIP Status Inference immediately
+          const statusVerdict = inferBusinessStatus(newUbid.ubid, events, 180, newUbid.canonicalName);
+          newUbid.status = statusVerdict.status;
+          newUbid.reasoning = statusVerdict.reasoning;
+          
+          newUbid.evidence.push('Instantiated as Independent Entity after Senior Reviewer rejected linkage suggestion.');
+          next.push(newUbid);
+        }
+      });
+      
+      return next;
+    });
+  }, [logAudit, addNotification, ubids]);
+
+  const removeFromBlacklist = (recordIdA: string, recordIdB: string) => {
     setKnowledge(prev => ({
       ...prev,
-      manualBlacklist: [
-        ...prev.manualBlacklist, 
-        { recordIdA: suggestion.recordA.id, recordIdB: suggestion.recordB.id }
-      ]
+      manualBlacklist: prev.manualBlacklist.filter(entry => 
+        !((entry.recordIdA === recordIdA && entry.recordIdB === recordIdB) ||
+          (entry.recordIdB === recordIdA && entry.recordIdA === recordIdB))
+      )
     }));
-  }, []);
+    logAudit('Blacklist Cleared', recordIdA, `Reinstated matching potential with record ${recordIdB}.`, 'Security');
+  };
 
   const handleResolveOrphan = useCallback((event: ActivityEvent, action: 'create' | 'link', targetUbidId?: string) => {
     if (action === 'create') {
-      const newUbidId = `KA-ORPHAN-${event.id.substring(0, 5)}`;
-      logAudit('Orphan Resolution', newUbidId, `Projected new entity from unlinked signal ${event.eventType} (${event.id})`, 'Governance');
+      const newUbidId = generateUnifiedBusinessIdentifier(`ORPHAN-${event.id}`, true);
+      logAudit('Orphan Resolution', newUbidId, `Projected new Provisional Internal ID from signal ${event.eventType}`, 'Governance');
+      addNotification('Orphan Projection', `New Internal ID generated from ${event.eventType} signal.`, 'info', newUbidId);
       
       // Create an initial source record from the orphan signal hints
       const initialRecord: SourceRecord = {
@@ -3021,7 +4352,8 @@ function UBIDIntelligenceApp() {
         businessName: event.businessNameHint || `Unknown Entity (${event.id})`,
         address: event.addressHint || 'Address TBD',
         pinCode: event.pinCodeHint || '000000',
-        ownerName: 'Derived from Signal'
+        ownerName: 'Derived from Signal',
+        status: 'ACTIVE'
       };
 
       const newRecord: UBIDRecord = {
@@ -3030,20 +4362,35 @@ function UBIDIntelligenceApp() {
         canonicalName: initialRecord.businessName,
         canonicalAddress: initialRecord.address,
         pinCode: initialRecord.pinCode,
-        status: 'Active',
+        status: 'ACTIVE',
         statusHistory: [
-          { from: 'Unknown', to: 'Active', reason: 'New Entity Projection from Orphan Signal', timestamp: new Date().toISOString(), actor: 'Senior Reviewer (White Hawk)', type: 'Manual' }
+          { from: 'UNKNOWN', to: 'ACTIVE', reason: 'New Entity Projection from Orphan Signal', timestamp: new Date().toISOString(), actor: 'Senior Reviewer (White Hawk)', type: 'Manual' }
         ],
         confidence: 0.75,
         riskScore: 30,
         evidence: [`Resolved from Orphan Event: ${event.eventType}`],
         lastUpdated: new Date().toISOString().split('T')[0],
-        linkedRecords: [initialRecord]
+        linkedRecords: [initialRecord],
+        score: 0.75,
+        confidence_metadata: { anchor: 'Internal Registry', fuzzy: 'Orphan Projection' },
+        verdict: 'HUMAN_REVIEW',
+        edgeCaseFlag: 'NONE',
+        reasoning: `Resolved from Orphan Event: ${event.eventType}`,
+        ui_metadata: { label: 'Synthetic Data', color: '#00008B' },
+        linked_units: [
+          {
+            unit_id: initialRecord.id,
+            type: initialRecord.department,
+            unit_status: initialRecord.status.toUpperCase(),
+            latest_signal: format(new Date(), 'yyyy-MM-dd')
+          }
+        ]
       };
       setUbids(prev => [...prev, newRecord]);
       setEvents(prev => prev.map(e => e.id === event.id ? { ...e, ubid: newUbidId } : e));
     } else if (action === 'link' && targetUbidId) {
       logAudit('Orphan Linkage', targetUbidId, `Linked unlinked signal ${event.eventType} to existing entity.`, 'Governance');
+      addNotification('Signal Resolved', `Previously orphaned ${event.eventType} signal linked to ${targetUbidId}.`, 'success', targetUbidId);
       setUbids(prev => prev.map(u => {
         if (u.ubid === targetUbidId) {
           return {
@@ -3055,7 +4402,7 @@ function UBIDIntelligenceApp() {
       }));
       setEvents(prev => prev.map(e => e.id === event.id ? { ...e, ubid: targetUbidId } : e));
     }
-  }, [setUbids, setEvents]);
+  }, [setUbids, setEvents, logAudit, addNotification]);
 
   const globalResults = useMemo(() => {
     if (!globalSearch) return [];
@@ -3072,8 +4419,9 @@ function UBIDIntelligenceApp() {
     { id: 'review', label: 'Reviewer Queue', icon: Users },
     { id: 'resolution', label: 'Orphan Signals', icon: AlertCircle },
     { id: 'audit', label: 'Audit Ledger', icon: History },
+    { id: 'reversion', label: 'Manual Reversion', icon: ShieldAlert },
     { id: 'system-query', label: 'System Query', icon: Zap },
-    { id: 'query', label: 'System Logic', icon: Settings },
+    { id: 'logic', label: 'System Logic', icon: Settings },
   ];
 
   return (
@@ -3166,11 +4514,14 @@ function UBIDIntelligenceApp() {
                         <div className="flex-1 min-w-0 pr-4">
                           <p className="text-xs font-bold text-text-main truncate">{u.canonicalName}</p>
                           <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-[9px] font-mono font-bold text-accent">{u.ubid}</span>
+                            <span className={cn(
+                              "text-[9px] font-mono font-bold",
+                              u.ubid.includes('KA-INT') ? "text-orange-700" : "text-accent"
+                            )}>{u.ubid}</span>
                             <span className={cn(
                               "text-[8px] font-bold px-1 rounded uppercase",
-                              u.status === 'Active' ? "bg-green-100 text-status-active" :
-                              u.status === 'Dormant' ? "bg-orange-100 text-status-dormant" :
+                              u.status.toUpperCase() === 'ACTIVE' ? "bg-green-100 text-status-active" :
+                              u.status.toUpperCase() === 'DORMANT' ? "bg-orange-100 text-status-dormant" :
                               "bg-red-100 text-status-closed"
                             )}>{u.status}</span>
                           </div>
@@ -3192,9 +4543,39 @@ function UBIDIntelligenceApp() {
             </AnimatePresence>
           </div>
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 text-xs font-medium text-text-main">
+            <div className="relative">
+              <button 
+                onClick={() => setShowNotifications(!showNotifications)}
+                className="p-2 text-text-muted hover:text-accent bg-bg/50 rounded-full transition-all relative group"
+              >
+                {notifications.some(n => !n.read) ? (
+                  <BellRing className="w-5 h-5 text-accent animate-pulse" />
+                ) : (
+                  <Bell className="w-5 h-5" />
+                )}
+                {notifications.some(n => !n.read) && (
+                  <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-card shadow-sm" />
+                )}
+              </button>
+
+              <AnimatePresence>
+                {showNotifications && (
+                  <NotificationCenter 
+                    notifications={notifications}
+                    onClose={() => setShowNotifications(false)}
+                    onMarkAsRead={(id) => setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))}
+                    onClearAll={() => {
+                      setNotifications([]);
+                      setShowNotifications(false);
+                    }}
+                  />
+                )}
+              </AnimatePresence>
+            </div>
+            
+            <div className="flex items-center gap-2 text-xs font-medium text-text-main border-l border-border pl-4">
               <span>Admin: Dept of Commerce</span>
-              <div className="w-8 h-8 bg-slate-300 rounded-full"></div>
+              <div className="w-8 h-8 bg-slate-300 rounded-full flex items-center justify-center text-[10px] font-bold text-slate-600">WH</div>
             </div>
           </div>
         </header>
@@ -3209,13 +4590,14 @@ function UBIDIntelligenceApp() {
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.15 }}
               >
-                {activeTab === 'dashboard' && <Dashboard ubids={ubids} events={events} />}
+                {activeTab === 'dashboard' && <Dashboard ubids={ubids} events={events} addNotification={addNotification} />}
                 {activeTab === 'review' && (
                   <ReviewerQueue 
                     suggestions={suggestions} 
                     setSuggestions={setSuggestions}
                     onApprove={handleMatchApproved} 
                     onReject={handleMatchRejected}
+                    knowledge={knowledge}
                   />
                 )}
                 {activeTab === 'registry' && (
@@ -3225,6 +4607,7 @@ function UBIDIntelligenceApp() {
                     onUpdateStatus={handleStatusOverride}
                     onUnlinkRecord={handleUnlinkRecord}
                     onResolveOrphans={() => setActiveTab('resolution')}
+                    onAddNotification={addNotification}
                     knowledge={knowledge}
                     events={events}
                   />
@@ -3247,26 +4630,25 @@ function UBIDIntelligenceApp() {
                   />
                 )}
                 {activeTab === 'audit' && <AuditTrail log={auditLog} />}
-                {activeTab === 'query' && (
-                  <div className="space-y-5">
-                    <div className="bg-card p-6 rounded-lg border border-border">
-                      <h2 className="text-sm font-bold mb-4">Master Data Linkage Logic</h2>
-                      <div className="space-y-4 text-xs leading-relaxed">
-                        <div className="p-3 bg-bg rounded border border-border">
-                          <p className="font-bold text-accent mb-1">Rule 1: UBID Identity (KA-XXXXXXXX-C)</p>
-                          <p>All entities are assigned a globally unique identifier with an 8-character entropy pool (Base36, excluding O/I) and a Mod-36 checksum for reliability during manual transcription.</p>
-                        </div>
-                        <div className="p-3 bg-bg rounded border border-border">
-                          <p className="font-bold text-accent mb-1">Rule 2: Deterministic Anchoring</p>
-                          <p>UBIDs are generated deterministically based on central identifiers (GSTIN/PAN) or high-confidence business attributes, ensuring consistency across system reloads.</p>
-                        </div>
-                        <div className="p-3 bg-bg rounded border border-border">
-                          <p className="font-bold text-accent mb-1">Rule 3: Late Anchoring</p>
-                          <p>Internal UBIDs are automatically upgraded to Central UBIDs if a newer record (e.g. from Commercial Taxes) provides a PAN/GSTIN for any record in the cluster.</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                {activeTab === 'reversion' && (
+                  <ManualReversionWorkspace 
+                    ubids={ubids} 
+                    knowledge={knowledge} 
+                    onUnlinkRecord={handleUnlinkRecord} 
+                    onRemoveBlacklist={removeFromBlacklist}
+                    onTransferRecord={handleTransferRecord}
+                    addNotification={addNotification}
+                    onLinkRecords={(recordA, recordB) => {
+                      handleMatchApproved({
+                        id: `MANUAL-${Date.now()}`,
+                        recordA,
+                        recordB,
+                        confidence: 0.99,
+                        reasons: ['Manual Ground Truth Linkage by Senior Reviewer'],
+                        status: 'Pending'
+                      });
+                    }}
+                  />
                 )}
                 {activeTab === 'system-query' && (
                   <div className="space-y-5">
@@ -3283,12 +4665,28 @@ function UBIDIntelligenceApp() {
                     />
                   </div>
                 )}
+                {activeTab === 'logic' && (
+                  <SystemLogicLedger 
+                    knowledge={knowledge} 
+                    setKnowledge={setKnowledge}
+                    setUbids={setUbids}
+                    addNotification={addNotification}
+                    logAudit={logAudit}
+                    sourceRecords={sourceRecords}
+                  />
+                )}
               </motion.div>
             </AnimatePresence>
           </div>
         </div>
       </main>
       <GeminiChat />
+      
+      <NotificationManager 
+        notifications={notifications} 
+        onMarkRead={(id) => setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))}
+        onClear={() => setNotifications([])}
+      />
     </div>
   );
 }

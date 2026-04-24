@@ -32,7 +32,7 @@ I was involved in the development,debugging and testing of this app.
 
 Create a ".env.local" file:
 
-VITE_GEMINI_API_KEY=your_api_key_here
+GEMINI_API_KEY=your_api_key_here
 
 ---
 
@@ -63,3 +63,4 @@ npm run dev
 
 Arindam Mandal,
 Rohan Mishra 
+
