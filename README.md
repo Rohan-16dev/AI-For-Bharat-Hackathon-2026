@@ -61,6 +61,10 @@ npm run dev
 
 👤 Authors
 
-Arindam Mandal,
+Arindam Mandal
+
 Rohan Mishra 
 
+
+⚠️ This project is part of a hackathon submission.
+Unauthorized reuse, reproduction, or submission as your own work is strictly prohibited.
