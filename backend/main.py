@@ -13,13 +13,19 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*","http://localhost:3000", "http://localhost:5173"],  # In production, specify your frontend URL
+    allow_origins=["http://localhost:3000", "http://localhost:5173","https://ai-for-bharat-hackathon.vercel.app","https://ai-for-bharat-hackathon-3emhyeuba-rohan-16devs-projects.vercel.app"],  # In production, specify your frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+port = int(os.environ.get("PORT", 10000)) #Dynamic port
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
 
 @app.get("/")
 def root():
