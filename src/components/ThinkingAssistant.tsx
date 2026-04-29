@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Brain, Sparkles, Loader2, AlertCircle } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { getHighThinkingAnalysis } from '../services/geminiService';
 import { cn } from '../lib/utils';
 

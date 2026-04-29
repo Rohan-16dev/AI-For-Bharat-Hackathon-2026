@@ -1,6 +1,6 @@
 import React, { Component, ErrorInfo, ReactNode, useState } from 'react';
 import { AlertTriangle, ShieldCheck, HeartPulse, RefreshCw, Send, Loader2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { getHealerPatch } from '../services/geminiService';
 import { cn } from '../lib/utils';
 import ReactMarkdown from 'react-markdown';

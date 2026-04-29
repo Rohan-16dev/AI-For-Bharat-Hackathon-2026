@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Database, Zap, FileJson, AlertCircle, CheckCircle2, Loader2, Sparkles, Wand2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { analyzeDataAnomaly } from '../services/geminiService';
 import ReactMarkdown from 'react-markdown';
 import { cn } from '../lib/utils';

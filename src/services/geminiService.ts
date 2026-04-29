@@ -1,6 +1,5 @@
-import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+// import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
 const SYSTEM_LOGIC_KNOWLEDGE = `
 SYSTEM ARCHITECTURE & LOGIC:
@@ -34,23 +33,19 @@ export const getGeneralChatResponse = async (message: string, history: { role: '
     // Scramble any PII that might have been typed into chat
     const syntheticMessage = vault.scrambleObject(message);
     
-    const chat = ai.chats.create({
-      model: "gemini-3.1-flash-lite-preview",
-      config: {
-        systemInstruction: `You are the UBID Intelligence Assistant. Provide ultra-fast, direct, and structured data.
-        The system is designed to layer on top of 40+ departmental silos without modifying source systems.
-        Privacy Constraint: All PII is scrambled into 'SYNTHETIC_n' tokens before AI analysis.
-        
-        ${SYSTEM_LOGIC_KNOWLEDGE}`,
+    const result = await fetch("http://127.0.0.1:8000/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
       },
-      history: history as any,
+      body: JSON.stringify({ message: syntheticMessage, history })
     });
 
-    const result = await chat.sendMessage({ message: syntheticMessage });
-    if (!result || !result.text) {
-      throw new Error('AI Assistant return null signal.');
+    if (!result.ok) {
+      throw new Error('AI Assistant returned an error.');
     }
-    return result.text;
+    const data = await result.json();
+    return data.reply;
   } catch (error: any) {
     console.error("AI Chat failure:", error);
     throw new Error(`Chat Engine unavailable: ${error.message || 'Unknown network error'}`);
@@ -159,19 +154,19 @@ export const getHighThinkingAnalysis = async (input: any) => {
     
     Anonymized Data Stream: ${JSON.stringify(syntheticInput, null, 2)}`;
 
-    const result = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite-preview",
-      contents: prompt,
-      config: {
-        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
-        systemInstruction: "You are a senior business intelligence analyst. You work strictly on synthetic/scrambled inputs to respect PII privacy.",
-      }
+    const result = await fetch ("http://127.0.0.1:8000/analyze", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ data: syntheticInput })
     });
+    const data = await result.json();
 
-    if (!result || !result.text) {
+    if (!data || !data.result) {
       throw new Error("High thinking engine returned null result.");
     }
-    return result.text;
+    return data.result;
   } catch (error: any) {
     console.error("High Thinking API failure:", error);
     throw new Error(`Strategic Analysis Engine unavailable: ${error.message || 'Unknown network error'}`);
@@ -189,20 +184,19 @@ export const getMapsGroundingInfo = async (location: string) => {
     
     Format the report with clear headings and structured sections. Use numbered lists for details.`;
 
-    const result = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite-preview",
-      contents: prompt,
-      config: {
-        tools: [{ googleMaps: {} } as any],
-        toolConfig: { includeServerSideToolInvocations: true } as any,
-        systemInstruction: "You are a specialized industrial intelligence analyst. Your reports are highly structured, data-driven, and professional. Use clear headings and numbered lists. DO NOT use asterisks (*) for formatting. Ensure each point starts on a new line."
-      }
+    const result = await fetch("http://127.0.0.1:8000/map", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ location })
     });
+    const data = await result.json();
 
-    if (!result || !result.text) {
+    if (!data || !data.result) {
       throw new Error("Maps grounding engine returned null result.");
     }
-    return result.text;
+    return data.result;
   } catch (error: any) {
     console.error("Maps Grounding API failure:", error);
     throw new Error(`Geospatial Intelligence Engine unavailable: ${error.message || 'Unknown network error'}`);
@@ -218,18 +212,19 @@ export const getHealerPatch = async (errorStack: string, componentContext: strin
   Suggest a defensive programming snippet to prevent this specific crash in the future. 
   Format: Clear explanation + Code Snippet. No asterisks.`;
 
-  const result = await ai.models.generateContent({
-    model: "gemini-3.1-flash-lite-preview",
-    contents: prompt,
-    config: {
-      systemInstruction: "You are an Automated Error Resolution AI designed for the UBID system. You stabilize and fix bugs."
-    }
+  const result = await fetch("http://127.0.0.1:8000/heal", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ errorStack, componentContext })
   });
-  return result.text;
+  const data = await result.json();
+  return data.result;
 };
 
-export const analyzeDataAnomaly = async (data: any) => {
-  const syntheticData = vault.scrambleObject(data);
+export const analyzeDataAnomaly = async (dataInput: any) => {
+  const syntheticData = vault.scrambleObject(dataInput);
   const prompt = `The system has received a data record that doesn't fully match the standard UBID schema.
   RAW DATA (SCRAMBLED): ${JSON.stringify(syntheticData, null, 2)}
   
@@ -240,12 +235,13 @@ export const analyzeDataAnomaly = async (data: any) => {
   
   Format: Schema Mapping Table + Recommendation. No asterisks.`;
 
-  const result = await ai.models.generateContent({
-    model: "gemini-3.1-flash-lite-preview",
-    contents: prompt,
-    config: {
-      systemInstruction: "You are a Data Resilience AI. You work on scrambled data to prioritize privacy. You maintain compatibility with 40+ legacy systems."
-    }
+  const result = await fetch("http://127.0.0.1:8000/anomaly", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ data: syntheticData })
   });
-  return result.text;
+  const data = await result.json();
+  return data.result;
 };
