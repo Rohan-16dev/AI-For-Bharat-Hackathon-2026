@@ -26,7 +26,7 @@ def root():
     return {"status": "ok", "message": "Backend is running. Use /docs for API docs."}
 
 # -----------------------------
-# 📦 Privacy Vault (your logic)
+# 📦 Privacy Vault 
 # -----------------------------
 class PrivacyVault:
     def __init__(self):
