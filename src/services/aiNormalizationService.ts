@@ -13,7 +13,7 @@ export const cleanBusinessData = async (rawRecord: Partial<SourceRecord>): Promi
   try {
     const syntheticRecord = scrambleForAI(rawRecord);
 
-    const response = await fetch("http://127.0.0.1:8000/clean", {
+    const response = await fetch("https://ai-hackathon-backend-ej9p.onrender.com/clean", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"

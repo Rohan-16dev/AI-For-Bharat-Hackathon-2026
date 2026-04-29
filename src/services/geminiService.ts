@@ -33,7 +33,7 @@ export const getGeneralChatResponse = async (message: string, history: { role: '
     // Scramble any PII that might have been typed into chat
     const syntheticMessage = vault.scrambleObject(message);
     
-    const result = await fetch("http://127.0.0.1:8000/chat", {
+    const result = await fetch("https://ai-hackathon-backend-ej9p.onrender.com/chat", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -154,7 +154,7 @@ export const getHighThinkingAnalysis = async (input: any) => {
     
     Anonymized Data Stream: ${JSON.stringify(syntheticInput, null, 2)}`;
 
-    const result = await fetch ("http://127.0.0.1:8000/analyze", {
+    const result = await fetch ("https://ai-hackathon-backend-ej9p.onrender.com/analyze", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -184,7 +184,7 @@ export const getMapsGroundingInfo = async (location: string) => {
     
     Format the report with clear headings and structured sections. Use numbered lists for details.`;
 
-    const result = await fetch("http://127.0.0.1:8000/map", {
+    const result = await fetch("https://ai-hackathon-backend-ej9p.onrender.com/map", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -212,7 +212,7 @@ export const getHealerPatch = async (errorStack: string, componentContext: strin
   Suggest a defensive programming snippet to prevent this specific crash in the future. 
   Format: Clear explanation + Code Snippet. No asterisks.`;
 
-  const result = await fetch("http://127.0.0.1:8000/heal", {
+  const result = await fetch("https://ai-hackathon-backend-ej9p.onrender.com/heal", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -235,7 +235,7 @@ export const analyzeDataAnomaly = async (dataInput: any) => {
   
   Format: Schema Mapping Table + Recommendation. No asterisks.`;
 
-  const result = await fetch("http://127.0.0.1:8000/anomaly", {
+  const result = await fetch("https://ai-hackathon-backend-ej9p.onrender.com/anomaly", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
