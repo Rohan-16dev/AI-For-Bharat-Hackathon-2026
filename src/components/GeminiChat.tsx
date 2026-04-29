@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { MessageSquare, Send, X, Minimize2, Maximize2, Sparkles, User, Bot, AlertCircle } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { getGeneralChatResponse } from '../services/geminiService';
 import { cn } from '../lib/utils';
 

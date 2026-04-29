@@ -46,7 +46,6 @@ npm run dev
 📌 Notes
 
 - This project uses the Gemini API (free tier supported)
-- No backend required — runs fully client-side
 
 ---
 

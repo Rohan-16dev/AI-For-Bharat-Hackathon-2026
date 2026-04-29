@@ -60,7 +60,7 @@ import {
   Area,
   Line
 } from 'recharts';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { subMonths, formatDistanceToNow, parseISO, format } from 'date-fns';
 import { cn } from './lib/utils';
 import { MOCK_UBIDS, MOCK_EVENTS, generateMockData } from './mockData';
