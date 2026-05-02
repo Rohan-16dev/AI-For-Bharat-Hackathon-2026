@@ -31,6 +31,7 @@ I was involved in the development,debugging and testing of this app.
 ⚙️ Tech Stack
 
 - React + TypeScript (Frontend)
+- Python (Backend)
 - Vite (Build Tool)
 - TailwindCSS (Styling)
 - Google Gemini API (AI Engine)
