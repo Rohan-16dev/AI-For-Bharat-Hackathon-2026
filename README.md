@@ -40,7 +40,7 @@ I was involved in the development,debugging and testing of this app.
 
 🔐 Environment Setup
 
-Create a ".env.local" file:
+Create a ".env" file in backend folder :
 
 GEMINI_API_KEY=your_api_key_here
 
