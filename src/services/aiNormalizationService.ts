@@ -15,7 +15,7 @@ export const cleanBusinessData = async (rawRecord: Partial<SourceRecord>): Promi
     const syntheticRecord = vault.scrambleObject(rawRecord);
     
     const response = await generateAIContent({
-      modelName: "gemini-3.1-flash-lite-preview",
+      modelName: "gemini-3.1-flash-lite",
       prompt: `You are the Karnataka Government Data Normalizer. 
       Clean the following messy business record into a standard format.
       The data is SCRAMBLED (PII replaced with SYNTHETIC_n tokens).

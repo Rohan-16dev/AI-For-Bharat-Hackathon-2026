@@ -176,7 +176,7 @@ app.post("/api/ai/generate", verifyApiKey, async (req, res) => {
     }
 
     const result = await ai.models.generateContent({
-      model: payload.modelName || payload.model || "gemini-3.1-flash-lite-preview",
+      model: payload.modelName || payload.model || "gemini-3.1-flash-lite",
       contents: payload.prompt || payload.contents,
       config: {
         systemInstruction: payload.systemInstruction,
@@ -203,7 +203,7 @@ app.post("/api/ai/chat", verifyApiKey, async (req, res) => {
     }
 
     const chat = ai.chats.create({
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-3.1-flash-lite",
       config: { systemInstruction },
       history: Array.isArray(history) ? history : [],
     });

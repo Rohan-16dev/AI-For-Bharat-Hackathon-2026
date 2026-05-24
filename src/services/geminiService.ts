@@ -281,7 +281,7 @@ export const getHighThinkingAnalysis = async (input: any) => {
 
     const result = await apiRequest("generate", {
       prompt,
-      modelName: "gemini-3.1-flash-lite-preview",
+      modelName: "gemini-3.1-flash-lite",
       systemInstruction: "You are a senior business intelligence analyst. You work strictly on synthetic/scrambled inputs to respect PII privacy.",
       thinkingConfig: { thinkingLevel: "HIGH" }
     });
@@ -306,7 +306,7 @@ export const getMapsGroundingInfo = async (location: string) => {
 
     const result = await apiRequest("generate", {
       prompt,
-      modelName: "gemini-3.1-flash-lite-preview",
+      modelName: "gemini-3.1-flash-lite",
       systemInstruction: "You are a specialized industrial intelligence analyst. Your reports are highly structured, data-driven, and professional. Use clear headings and numbered lists. DO NOT use asterisks (*) for formatting. Ensure each point starts on a new line."
     });
 
@@ -333,7 +333,7 @@ export const getHealerPatch = async (errorStack: string, componentContext: strin
   try {
     const result = await apiRequest("generate", {
       prompt,
-      modelName: "gemini-3.1-flash-lite-preview",
+      modelName: "gemini-3.1-flash-lite",
       systemInstruction: "You are an Automated Error Resolution AI designed for the UBID system. You stabilize and fix bugs."
     });
 
@@ -369,7 +369,7 @@ export const analyzeDataAnomaly = async (data: any) => {
   try {
     const result = await apiRequest("generate", {
       prompt,
-      modelName: "gemini-3.1-flash-lite-preview",
+      modelName: "gemini-3.1-flash-lite",
       systemInstruction: "You are a Data Resilience AI. You work on scrambled data to prioritize privacy. You maintain compatibility with 40+ legacy systems."
     });
 
