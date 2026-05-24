@@ -150,7 +150,7 @@ User Input:
         prompt = f"{history_text}\n{prompt}"
 
     response = client.models.generate_content(
-        model="gemini-3.1-flash-lite-preview",
+        model="gemini-3.1-flash-lite",
         contents=prompt
     )
     return {"reply": response.text}
@@ -178,7 +178,7 @@ Anonymized Data Stream: {data}
 """
 
     response = client.models.generate_content(
-        model="gemini-3.1-flash-lite-preview",
+        model="gemini-3.1-flash-lite",
         contents=prompt
     )
     return {"result": response.text}
@@ -201,7 +201,7 @@ Format the report with clear headings and structured sections. Use numbered list
 """
 
     response = client.models.generate_content(
-        model="gemini-3.1-flash-lite-preview",
+        model="gemini-3.1-flash-lite",
         contents=prompt
     )
     return {"result": response.text}
@@ -223,7 +223,7 @@ Format: Clear explanation + Code Snippet. No asterisks.
 """
 
     response = client.models.generate_content(
-        model="gemini-3.1-flash-lite-preview",
+        model="gemini-3.1-flash-lite",
         contents=prompt
     )
     return {"result": response.text}
@@ -249,7 +249,7 @@ Format: Schema Mapping Table + Recommendation. No asterisks.
 """
 
     response = client.models.generate_content(
-        model="gemini-3.1-flash-lite-preview",
+        model="gemini-3.1-flash-lite",
         contents=prompt
     )
     return {"result": response.text}
@@ -278,7 +278,7 @@ Return the cleaned record as valid JSON only. No markdown code blocks.
 
     try:
         response = client.models.generate_content(
-            model="gemini-3.1-flash-lite-preview",
+            model="gemini-3.1-flash-lite",
             contents=prompt
         )
     except Exception as e:
